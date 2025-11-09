@@ -1,35 +1,46 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-import logging
 
 from app.config import settings
-from app.core.logging_config import setup_logging
+from app.core.logging_config import setup_logging, get_logger
 from app.db.mongodb import init_db
-from app.middleware.correlation import CorrelationIdMiddleware
+from app.middleware.access_log import AccessLogMiddleware, RequestContextMiddleware
 from app.routes import groups, messages, websocket
 
-# Setup logging
+# Setup structured logging BEFORE any other imports that might log
 setup_logging()
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
-    logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+    logger.info(
+        "application_startup",
+        app_name=settings.APP_NAME,
+        version=settings.APP_VERSION,
+        environment=settings.ENVIRONMENT,
+        log_level=settings.LOG_LEVEL,
+    )
+
     try:
         await init_db()
-        logger.info("Database initialized successfully")
+        logger.info("database_initialized", database=settings.DATABASE_NAME)
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.error(
+            "database_initialization_failed",
+            error=str(e),
+            database_url=settings.MONGODB_URL,
+            exc_info=True,
+        )
         raise
 
     yield
 
     # Shutdown
-    logger.info("Shutting down application")
+    logger.info("application_shutdown")
 
 
 # Create FastAPI app
@@ -39,7 +50,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware
+# Middleware order matters! They execute in reverse order of registration.
+# Last added = first to execute
+
+# Add CORS middleware (executes first)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -48,8 +62,11 @@ app.add_middleware(
     allow_headers=settings.CORS_ALLOW_HEADERS,
 )
 
-# Add correlation ID middleware
-app.add_middleware(CorrelationIdMiddleware)
+# Add access logging middleware (executes second - logs every request)
+app.add_middleware(AccessLogMiddleware)
+
+# Add request context middleware (executes last - enriches request with user info)
+app.add_middleware(RequestContextMiddleware)
 
 # Include routers
 app.include_router(groups.router, prefix=settings.API_PREFIX, tags=["groups"])
@@ -82,9 +99,13 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
+
+    # Run with proper logging configuration
     uvicorn.run(
         "app.main:app",
         host=settings.HOST,
         port=settings.PORT,
-        reload=settings.DEBUG
+        reload=settings.DEBUG,
+        log_level=settings.LOG_LEVEL.lower(),
+        access_log=False,  # Disable default access log - we use custom middleware
     )

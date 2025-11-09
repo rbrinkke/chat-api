@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: chat-api-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: chat_db
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/chat_db --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Chat API
+  chat-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chat-api
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      # Application
+      APP_NAME: "Chat API"
+      ENVIRONMENT: "development"  # Change to 'production' for prod deployment
+      DEBUG: "false"
+
+      # Logging (Critical for debugging!)
+      LOG_LEVEL: "INFO"  # DEBUG | INFO | WARNING | ERROR | CRITICAL
+      LOG_JSON_FORMAT: "true"  # Always true in Docker for log aggregation
+      LOG_SQL_QUERIES: "false"
+
+      # Database
+      MONGODB_URL: "mongodb://mongodb:27017"
+      DATABASE_NAME: "chat_db"
+
+      # JWT (MUST match auth-api settings!)
+      JWT_SECRET: "${JWT_SECRET:-dev-secret-key-change-in-production}"
+      JWT_ALGORITHM: "HS256"
+
+      # CORS
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:8000"]'
+
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    # Logging configuration for Docker
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service,environment"
+    labels:
+      service: "chat-api"
+      environment: "development"
+
+volumes:
+  mongodb_data:
+    driver: local
+
+# Production deployment notes:
+#
+# 1. Use environment-specific .env files:
+#    docker-compose --env-file .env.production up -d
+#
+# 2. For debugging, set LOG_LEVEL=DEBUG:
+#    docker-compose up chat-api -e LOG_LEVEL=DEBUG
+#
+# 3. View logs with correlation IDs:
+#    docker logs -f chat-api | grep "correlation_id"
+#
+# 4. View only errors:
+#    docker logs -f chat-api | grep '"level":"error"'
+#
+# 5. For log aggregation (ELK, Datadog, etc.), logs are already in JSON format

@@ -9,7 +9,7 @@ Een productie-klare FastAPI applicatie voor real-time chat met WebSocket onderst
 - **MongoDB + Beanie ODM** - Type-safe document models
 - **JWT Authenticatie** - Gedeeld secret met auth-api
 - **Groep-gebaseerde Autorisatie** - User-based access control
-- **Structured Logging** - Met correlation IDs
+- **🔥 Production-Grade Structured Logging** - Structlog met JSON output, correlation IDs, performance metrics
 - **CORS Support** - Voor frontend integratie
 
 ## Project Structuur
@@ -338,3 +338,76 @@ Voor productie deployment:
 ## License
 
 MIT
+
+## 🔍 Advanced Logging & Debugging
+
+Deze API implementeert **enterprise-grade structured logging** volgens Docker/Kubernetes best practices:
+
+### Logging Features
+
+✅ **Structured JSON Logs** - Machine-parseable logs voor log aggregators (ELK, Datadog, CloudWatch)  
+✅ **Correlation IDs** - Track requests door complete distributed system  
+✅ **Performance Metrics** - Automatische timing van elke request  
+✅ **Third-Party Filtering** - SQLAlchemy en andere libraries gefilterd om noise te reduceren  
+✅ **Zero Duplication** - Proper propagation control voorkomt dubbele logs  
+✅ **Security Redaction** - Passwords en tokens worden automatisch gecensored  
+✅ **Environment-Based** - Console output voor dev, JSON voor production  
+
+### Quick Debugging
+
+```bash
+# Debug mode activeren
+export LOG_LEVEL=DEBUG
+uvicorn app.main:app --reload
+
+# Docker logs volgen
+docker logs -f chat-api
+
+# Filter op correlation ID
+docker logs chat-api | grep "correlation_id.*abc-123"
+
+# Alleen errors
+docker logs chat-api | grep '"level":"error"'
+```
+
+### Log Levels
+
+```bash
+# In .env file:
+LOG_LEVEL="DEBUG"   # Zeer verbose - alle operations
+LOG_LEVEL="INFO"    # Standaard - belangrijke events
+LOG_LEVEL="WARNING" # Alleen warnings en errors
+LOG_LEVEL="ERROR"   # Alleen errors
+```
+
+### Performance Tracking
+
+Elke request wordt automatisch gelogd met performance metrics:
+
+```json
+{
+  "event": "http_request",
+  "correlation_id": "abc-123-def",
+  "method": "POST",
+  "path": "/api/chat/messages",
+  "status_code": 201,
+  "duration_ms": 45.2,
+  "slow_request": false,
+  "user_id": "user-456",
+  "client_ip": "192.168.1.1"
+}
+```
+
+**Alerts automatisch voor**:
+- Slow requests (>1000ms)  
+- Very slow requests (>5000ms)  
+- Errors met volledige stack traces  
+
+### Complete Debugging Guide
+
+Zie [DEBUGGING_GUIDE.md](./DEBUGGING_GUIDE.md) voor:
+- Uitgebreide debugging scenarios
+- Performance troubleshooting
+- Log aggregation queries
+- Security best practices
+

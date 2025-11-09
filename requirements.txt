@@ -21,3 +21,8 @@ websockets==12.0
 
 # Utilities
 python-dotenv==1.0.0
+
+# Logging (Production-grade structured logging)
+structlog==24.1.0
+PyYAML==6.0.1
+colorama==0.4.6  # For colored console output in development
