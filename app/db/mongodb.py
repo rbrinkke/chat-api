@@ -3,16 +3,32 @@ from beanie import init_beanie
 from app.models.group import Group
 from app.models.message import Message
 from app.config import settings
-import logging
+from app.core.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def init_db():
-    """Initialize database connection and Beanie ODM."""
+    """
+    Initialize database connection and Beanie ODM.
+
+    Connection pool configuration:
+    - maxPoolSize=50: Maximum number of connections (prevents exhaustion)
+    - minPoolSize=10: Pre-allocated connections (reduces latency)
+    - maxIdleTimeMS=45000: Close idle connections after 45s
+    - serverSelectionTimeoutMS=5000: Fail fast if MongoDB is down
+    """
     try:
-        # Create Motor client
-        client = AsyncIOMotorClient(settings.MONGODB_URL)
+        # Create Motor client with production-grade connection pooling
+        client = AsyncIOMotorClient(
+            settings.MONGODB_URL,
+            maxPoolSize=50,              # Max concurrent connections
+            minPoolSize=10,               # Keep warm connections ready
+            maxIdleTimeMS=45000,          # Close idle connections after 45s
+            serverSelectionTimeoutMS=5000,  # Timeout for server selection (fail fast)
+            retryWrites=True,             # Automatically retry write operations
+            retryReads=True,              # Automatically retry read operations
+        )
 
         # Test connection
         await client.admin.command('ping')

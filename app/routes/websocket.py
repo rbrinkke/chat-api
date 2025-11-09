@@ -3,12 +3,12 @@ from app.services.connection_manager import manager
 from app.services.chat_service import ChatService
 from app.middleware.auth import get_current_user
 from app.core.exceptions import UnauthorizedError, ForbiddenError
+from app.core.logging_config import get_logger
 from jose import JWTError, jwt
 from app.config import settings
-import logging
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def verify_websocket_token(token: str) -> str:

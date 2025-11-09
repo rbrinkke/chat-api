@@ -1,13 +1,35 @@
 from datetime import datetime
 from typing import List, Tuple
 from bson import ObjectId
+from bson.errors import InvalidId
 from app.models.group import Group
 from app.models.message import Message
-from app.core.exceptions import NotFoundError, ForbiddenError
+from app.core.exceptions import NotFoundError, ForbiddenError, BadRequestError
+from app.core.cache import cache, serialize_for_cache, deserialize_from_cache
+from app.core.logging_config import get_logger
 from app.services.connection_manager import manager
-import logging
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+def validate_object_id(id_string: str, resource_name: str = "Resource") -> ObjectId:
+    """
+    Safely convert a string to ObjectId with proper error handling.
+
+    Args:
+        id_string: The string to convert to ObjectId
+        resource_name: Name of the resource for error messages
+
+    Returns:
+        ObjectId: Valid ObjectId instance
+
+    Raises:
+        BadRequestError: If the string is not a valid ObjectId format
+    """
+    try:
+        return ObjectId(id_string)
+    except InvalidId:
+        raise BadRequestError(f"Invalid {resource_name} ID format: {id_string}")
 
 
 class ChatService:
@@ -61,24 +83,54 @@ class ChatService:
         page: int = 1,
         page_size: int = 50
     ) -> Tuple[List[Message], int]:
-        """Get paginated messages for a group."""
+        """
+        Get paginated messages for a group.
+
+        Performance optimization: Uses aggregation pipeline to fetch both
+        messages and total count in a single database roundtrip.
+        """
         # Verify user has access to the group
         await self._get_group_and_verify_access(group_id, user_id)
 
         # Calculate skip
         skip = (page - 1) * page_size
 
-        # Get messages (excluding soft-deleted ones)
-        messages = await Message.find(
-            Message.group_id == group_id,
-            Message.is_deleted == False
-        ).sort(-Message.created_at).skip(skip).limit(page_size).to_list()
+        # Use aggregation pipeline for optimal performance
+        # This fetches both paginated messages AND total count in ONE roundtrip
+        pipeline = [
+            # Match group and non-deleted messages
+            {"$match": {"group_id": group_id, "is_deleted": False}},
+            # Sort by newest first
+            {"$sort": {"created_at": -1}},
+            # Facet: Split into two parallel pipelines
+            {
+                "$facet": {
+                    # Pipeline 1: Get paginated messages
+                    "messages": [
+                        {"$skip": skip},
+                        {"$limit": page_size}
+                    ],
+                    # Pipeline 2: Get total count
+                    "total": [
+                        {"$count": "count"}
+                    ]
+                }
+            }
+        ]
 
-        # Get total count
-        total = await Message.find(
-            Message.group_id == group_id,
-            Message.is_deleted == False
-        ).count()
+        result = await Message.aggregate(pipeline).to_list()
+
+        # Extract results
+        if result and result[0]:
+            messages_data = result[0].get("messages", [])
+            total_data = result[0].get("total", [])
+
+            # Convert dict results back to Message objects
+            messages = [Message(**msg) for msg in messages_data]
+            total = total_data[0]["count"] if total_data else 0
+        else:
+            messages = []
+            total = 0
 
         return messages, total
 
@@ -90,7 +142,8 @@ class ChatService:
     ) -> Message:
         """Update a message (only by sender)."""
         # Get message
-        message = await Message.get(ObjectId(message_id))
+        message_id_obj = validate_object_id(message_id, "message")
+        message = await Message.get(message_id_obj)
         if not message:
             raise NotFoundError("Message not found")
 
@@ -131,7 +184,8 @@ class ChatService:
     ):
         """Soft delete a message (only by sender)."""
         # Get message
-        message = await Message.get(ObjectId(message_id))
+        message_id_obj = validate_object_id(message_id, "message")
+        message = await Message.get(message_id_obj)
         if not message:
             raise NotFoundError("Message not found")
 
@@ -167,11 +221,33 @@ class ChatService:
         return groups
 
     async def _get_group_and_verify_access(self, group_id: str, user_id: str) -> Group:
-        """Get group and verify user has access."""
-        group = await Group.get(ObjectId(group_id))
-        if not group:
-            raise NotFoundError("Group not found")
+        """
+        Get group and verify user has access.
 
+        Performance optimization: Uses Redis cache to avoid repeated database queries
+        for group data. Groups are cached for 5 minutes (TTL=300s).
+        """
+        group_id_obj = validate_object_id(group_id, "group")
+
+        # Try cache first
+        cache_key = f"group:{group_id}"
+        cached_data = await cache.get(cache_key)
+
+        if cached_data:
+            # Cache hit - deserialize
+            group_dict = deserialize_from_cache(cached_data)
+            group = Group(**group_dict)
+        else:
+            # Cache miss - fetch from database
+            group = await Group.get(group_id_obj)
+            if not group:
+                raise NotFoundError("Group not found")
+
+            # Store in cache (5 minutes TTL)
+            group_data = serialize_for_cache(group.model_dump())
+            await cache.set(cache_key, group_data, ttl=300)
+
+        # Verify access
         if user_id not in group.authorized_user_ids:
             raise ForbiddenError("You don't have access to this group")
 

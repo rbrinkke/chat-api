@@ -1,9 +1,10 @@
 from typing import Dict, Set
 from fastapi import WebSocket
 import json
-import logging
+import asyncio
+from app.core.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ConnectionManager:
@@ -42,26 +43,86 @@ class ConnectionManager:
             logger.error(f"Error sending personal message: {e}")
 
     async def broadcast_to_group(self, group_id: str, message: dict):
-        """Broadcast a message to all connections in a group."""
+        """
+        Broadcast a message to all connections in a group.
+
+        Performance optimization: Uses asyncio.gather to send to all
+        connections in parallel instead of sequentially. This dramatically
+        improves broadcast performance with many concurrent connections.
+        """
         if group_id not in self.active_connections:
             return
 
-        disconnected = set()
+        connections = list(self.active_connections[group_id])
 
-        for connection in self.active_connections[group_id]:
+        # Create tasks for parallel execution
+        async def send_to_connection(websocket: WebSocket) -> tuple[WebSocket, Exception | None]:
+            """Send message to a single connection, return any error."""
             try:
-                await connection.send_json(message)
+                await websocket.send_json(message)
+                return websocket, None
             except Exception as e:
                 logger.error(f"Error broadcasting to connection: {e}")
-                disconnected.add(connection)
+                return websocket, e
 
-        # Remove disconnected connections
-        for connection in disconnected:
-            self.disconnect(connection, group_id)
+        # Execute all sends in parallel
+        results = await asyncio.gather(
+            *[send_to_connection(conn) for conn in connections],
+            return_exceptions=False  # We handle exceptions inside send_to_connection
+        )
+
+        # Clean up any failed connections
+        for websocket, error in results:
+            if error is not None:
+                self.disconnect(websocket, group_id)
 
     def get_group_connection_count(self, group_id: str) -> int:
         """Get the number of active connections for a group."""
         return len(self.active_connections.get(group_id, set()))
+
+    async def shutdown_all(self):
+        """
+        Gracefully shut down all WebSocket connections.
+
+        Sends a shutdown notification to all connected clients before closing,
+        allowing them to handle the disconnection gracefully.
+        """
+        total_connections = sum(len(conns) for conns in self.active_connections.values())
+
+        if total_connections == 0:
+            logger.info("websocket_shutdown", message="No active connections to close")
+            return
+
+        logger.info("websocket_shutdown_started", connection_count=total_connections)
+
+        # Collect all connections from all groups
+        all_connections = []
+        for group_id, connections in self.active_connections.items():
+            all_connections.extend(connections)
+
+        # Send shutdown notification and close all connections in parallel
+        async def close_connection(websocket: WebSocket):
+            """Send shutdown message and close a connection."""
+            try:
+                # Send shutdown notification
+                await websocket.send_json({
+                    "type": "server_shutdown",
+                    "message": "Server is restarting. Please reconnect in a few seconds."
+                })
+                # Close with "Going Away" status code
+                await websocket.close(code=1001)
+            except Exception as e:
+                logger.debug(f"Error during websocket shutdown: {e}")
+
+        # Execute all closures in parallel
+        await asyncio.gather(
+            *[close_connection(conn) for conn in all_connections],
+            return_exceptions=True  # Continue even if some connections fail
+        )
+
+        # Clear all connection tracking
+        self.active_connections.clear()
+        logger.info("websocket_shutdown_completed", connections_closed=total_connections)
 
 
 # Global connection manager instance

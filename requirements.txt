@@ -27,3 +27,19 @@ python-dotenv==1.0.0
 structlog==24.1.0
 PyYAML==6.0.1
 colorama==0.4.6  # For colored console output in development
+
+# Security & Rate Limiting
+slowapi==0.1.9  # Rate limiting for FastAPI
+bleach==6.1.0  # HTML sanitization for XSS prevention
+
+# Caching (optional)
+redis==5.0.1  # Redis client for caching
+
+# Monitoring & Metrics
+prometheus-fastapi-instrumentator==6.1.0  # Prometheus metrics
+
+# Testing (development only)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2  # Async HTTP client for testing
+pytest-cov==4.1.0  # Code coverage
