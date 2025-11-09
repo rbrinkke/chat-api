@@ -10,7 +10,7 @@ from app.core.rate_limit import limiter
 from app.core.cache import cache
 from app.db.mongodb import init_db
 from app.middleware.access_log import AccessLogMiddleware, RequestContextMiddleware
-from app.routes import groups, messages, websocket
+from app.routes import groups, messages, websocket, dashboard
 
 # Setup structured logging BEFORE any other imports that might log
 setup_logging()
@@ -109,6 +109,7 @@ app.add_middleware(RequestContextMiddleware)
 app.include_router(groups.router, prefix=settings.API_PREFIX, tags=["groups"])
 app.include_router(messages.router, prefix=settings.API_PREFIX, tags=["messages"])
 app.include_router(websocket.router, prefix=settings.API_PREFIX, tags=["websocket"])
+app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
 
 
 # Health check endpoint
@@ -175,7 +176,8 @@ async def root():
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
+        "dashboard": "/dashboard"
     }
 
 
