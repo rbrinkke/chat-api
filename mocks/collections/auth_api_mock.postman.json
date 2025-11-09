@@ -1,0 +1,563 @@
+{
+  "info": {
+    "name": "Auth API Mock - Test Collection",
+    "description": "Comprehensive test collection for Auth API Mock Server. Includes all endpoints with examples and test scenarios.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refresh_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "user_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "test_email",
+      "value": "alice@example.com",
+      "type": "string"
+    },
+    {
+      "key": "test_password",
+      "value": "password123",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & Status",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Check if the mock server is running and healthy."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/metrics",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "metrics"]
+            },
+            "description": "Get mock server metrics including request counts and error rates."
+          },
+          "response": []
+        }
+      ],
+      "description": "Health check and monitoring endpoints."
+    },
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Login - Alice",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Parse response",
+                  "const response = pm.response.json();",
+                  "",
+                  "// Save tokens to collection variables",
+                  "pm.collectionVariables.set('access_token', response.access_token);",
+                  "pm.collectionVariables.set('refresh_token', response.refresh_token);",
+                  "pm.collectionVariables.set('user_id', response.user.id);",
+                  "",
+                  "// Tests",
+                  "pm.test('Status code is 200', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has access_token', () => {",
+                  "    pm.expect(response).to.have.property('access_token');",
+                  "});",
+                  "",
+                  "pm.test('Response has user data', () => {",
+                  "    pm.expect(response.user).to.have.property('id');",
+                  "    pm.expect(response.user).to.have.property('email');",
+                  "    pm.expect(response.user.email).to.equal('alice@example.com');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{test_email}}\",\n  \"password\": \"{{test_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Login with test user Alice and save tokens to collection variables."
+          },
+          "response": []
+        },
+        {
+          "name": "Login - Bob",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"bob@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Login as Bob Smith."
+          },
+          "response": []
+        },
+        {
+          "name": "Login - Invalid Credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 401', () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test('Error message is present', () => {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('detail');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"alice@example.com\",\n  \"password\": \"wrongpassword\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Test login with invalid credentials (should return 401)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Current User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "",
+                  "pm.test('Status code is 200', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('User ID matches', () => {",
+                  "    const userId = pm.collectionVariables.get('user_id');",
+                  "    pm.expect(response.id).to.equal(userId);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me?token={{access_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "me"],
+              "query": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}"
+                }
+              ]
+            },
+            "description": "Get current user information using access token."
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "",
+                  "// Update tokens",
+                  "pm.collectionVariables.set('access_token', response.access_token);",
+                  "pm.collectionVariables.set('refresh_token', response.refresh_token);",
+                  "",
+                  "pm.test('Status code is 200', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('New access token received', () => {",
+                  "    pm.expect(response).to.have.property('access_token');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/refresh",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "refresh"]
+            },
+            "description": "Refresh access token using refresh token."
+          },
+          "response": []
+        }
+      ],
+      "description": "Authentication endpoints - login, refresh, get current user."
+    },
+    {
+      "name": "User Management",
+      "item": [
+        {
+          "name": "Register New User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const response = pm.response.json();",
+                  "",
+                  "pm.test('User created with ID', () => {",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response).to.have.property('email');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"newuser@example.com\",\n  \"password\": \"securepass123\",\n  \"name\": \"New Test User\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/register",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "register"]
+            },
+            "description": "Register a new user account."
+          },
+          "response": []
+        },
+        {
+          "name": "Register - Duplicate Email",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 409', () => {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "",
+                  "pm.test('Error message indicates conflict', () => {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response.detail).to.include('already exists');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"alice@example.com\",\n  \"password\": \"password123\",\n  \"name\": \"Alice Duplicate\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/register",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "register"]
+            },
+            "description": "Attempt to register with existing email (should fail with 409)."
+          },
+          "response": []
+        },
+        {
+          "name": "List All Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/users",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "users"]
+            },
+            "description": "List all users in the mock database (development only)."
+          },
+          "response": []
+        }
+      ],
+      "description": "User management endpoints - register and list users."
+    },
+    {
+      "name": "Development & Testing",
+      "item": [
+        {
+          "name": "Reset User Database",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/users/reset",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "users", "reset"]
+            },
+            "description": "Reset user database to seed data (development only)."
+          },
+          "response": []
+        }
+      ],
+      "description": "Development and testing utilities."
+    },
+    {
+      "name": "Error Simulation",
+      "item": [
+        {
+          "name": "Simulate 401 Error",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 401', () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"alice@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login?simulate_error=401",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"],
+              "query": [
+                {
+                  "key": "simulate_error",
+                  "value": "401"
+                }
+              ]
+            },
+            "description": "Test error handling by simulating 401 Unauthorized error."
+          },
+          "response": []
+        },
+        {
+          "name": "Simulate 500 Error",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 500', () => {",
+                  "    pm.response.to.have.status(500);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"alice@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login?simulate_error=500",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"],
+              "query": [
+                {
+                  "key": "simulate_error",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Test error handling by simulating 500 Internal Server Error."
+          },
+          "response": []
+        },
+        {
+          "name": "Simulate 409 Conflict",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 409', () => {",
+                  "    pm.response.to.have.status(409);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"password123\",\n  \"name\": \"Test User\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/register?simulate_error=409",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "register"],
+              "query": [
+                {
+                  "key": "simulate_error",
+                  "value": "409"
+                }
+              ]
+            },
+            "description": "Test error handling by simulating 409 Conflict error."
+          },
+          "response": []
+        }
+      ],
+      "description": "Error simulation endpoints for testing error handling."
+    }
+  ]
+}
