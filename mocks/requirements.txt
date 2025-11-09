@@ -1,0 +1,26 @@
+# Mock Server Dependencies
+# Install with: pip install -r requirements.txt
+
+# FastAPI and server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib==1.7.4
+bcrypt==4.0.1
+
+# Validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+email-validator==2.1.0
+
+# Utilities
+python-dotenv==1.0.0
+faker==22.0.0  # For realistic mock data generation
+
+# Optional: Testing the mock servers
+httpx==0.25.2  # Async HTTP client for testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
