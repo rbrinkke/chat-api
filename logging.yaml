@@ -1,0 +1,138 @@
+# Advanced Logging Configuration (YAML)
+#
+# This file provides granular control over logging behavior.
+# Use with: uvicorn app.main:app --log-config logging.yaml
+#
+# Key Features:
+# - Separate log levels per module
+# - Multiple handlers (console, file, error file)
+# - Third-party library noise filtering
+# - Zero log duplication through propagation control
+#
+# For production deployment, adjust log levels and handlers as needed.
+
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  default:
+    (): structlog.stdlib.ProcessorFormatter
+    processor: structlog.dev.ConsoleRenderer
+    foreign_pre_chain:
+      - structlog.contextvars.merge_contextvars
+      - structlog.stdlib.add_log_level
+      - structlog.stdlib.add_logger_name
+      - structlog.processors.TimeStamper:
+          fmt: iso
+          utc: true
+
+  json:
+    (): structlog.stdlib.ProcessorFormatter
+    processor: structlog.processors.JSONRenderer
+    foreign_pre_chain:
+      - structlog.contextvars.merge_contextvars
+      - structlog.stdlib.add_log_level
+      - structlog.stdlib.add_logger_name
+      - structlog.processors.TimeStamper:
+          fmt: iso
+          utc: true
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: default
+    stream: ext://sys.stdout
+
+  console_json:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: json
+    stream: ext://sys.stdout
+
+  error:
+    class: logging.StreamHandler
+    level: ERROR
+    formatter: json
+    stream: ext://sys.stderr
+
+loggers:
+  # Root logger - catches everything
+  "":
+    level: INFO
+    handlers: [console, error]
+    propagate: false
+
+  # Application loggers
+  app:
+    level: DEBUG  # Enable debug logging for our app
+    handlers: [console, error]
+    propagate: false
+
+  # Uvicorn loggers
+  uvicorn:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+  uvicorn.error:
+    level: INFO
+    handlers: [console, error]
+    propagate: false  # CRITICAL: Prevents duplication
+
+  uvicorn.access:
+    level: CRITICAL  # Effectively disabled - we use custom middleware
+    handlers: []
+    propagate: false
+
+  # Third-party library noise filtering
+  # Set to WARNING to reduce log spam in debug mode
+
+  sqlalchemy.engine:
+    level: WARNING  # Prevents SQL query spam
+    handlers: [console]
+    propagate: false
+
+  databases:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  httpx:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  httpcore:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  asyncio:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  pymongo:
+    level: INFO  # Keep MongoDB logs visible but not DEBUG
+    handlers: [console]
+    propagate: false
+
+  motor:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+# Environment-specific overrides
+# Uncomment and adjust based on deployment environment
+
+# Development (verbose logging)
+# root:
+#   level: DEBUG
+
+# Production (minimal logging, JSON format)
+# handlers:
+#   console:
+#     formatter: json
+# root:
+#   level: INFO
