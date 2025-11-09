@@ -10,6 +10,13 @@ from app.config import settings
 router = APIRouter()
 logger = get_logger(__name__)
 
+# Import metrics collector for dashboard
+try:
+    from app.services.dashboard_service import metrics_collector
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+
 
 async def verify_websocket_token(token: str) -> str:
     """Verify JWT token for WebSocket connection."""
@@ -52,6 +59,19 @@ async def websocket_endpoint(
 
         # Accept connection
         await manager.connect(websocket, group_id)
+        connection_count = manager.get_group_connection_count(group_id)
+
+        # Record connection event for dashboard
+        if METRICS_AVAILABLE:
+            try:
+                metrics_collector.record_ws_event(
+                    event_type="connected",
+                    group_id=group_id,
+                    user_id=user_id,
+                    connection_count=connection_count
+                )
+            except Exception as e:
+                logger.warning("ws_metrics_recording_failed", error=str(e))
 
         # Send welcome message
         await manager.send_personal_message(
@@ -69,7 +89,7 @@ async def websocket_endpoint(
             {
                 "type": "user_joined",
                 "user_id": user_id,
-                "connection_count": manager.get_group_connection_count(group_id)
+                "connection_count": connection_count
             }
         )
 
@@ -99,7 +119,20 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, group_id)
+        connection_count = manager.get_group_connection_count(group_id)
         logger.info(f"WebSocket disconnected from group {group_id}")
+
+        # Record disconnection event for dashboard
+        if METRICS_AVAILABLE:
+            try:
+                metrics_collector.record_ws_event(
+                    event_type="disconnected",
+                    group_id=group_id,
+                    user_id=user_id if 'user_id' in locals() else "unknown",
+                    connection_count=connection_count
+                )
+            except Exception as e:
+                logger.warning("ws_metrics_recording_failed", error=str(e))
 
         # Broadcast user left
         await manager.broadcast_to_group(
@@ -107,7 +140,7 @@ async def websocket_endpoint(
             {
                 "type": "user_left",
                 "user_id": user_id if 'user_id' in locals() else "unknown",
-                "connection_count": manager.get_group_connection_count(group_id)
+                "connection_count": connection_count
             }
         )
 

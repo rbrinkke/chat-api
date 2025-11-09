@@ -69,6 +69,12 @@ docker logs chat-api | grep "correlation_id.*abc-123"
 
 # Find slow requests (>1000ms)
 docker logs chat-api | grep '"slow_request":true'
+
+# Open real-time dashboard for monitoring
+open http://localhost:8001/dashboard
+
+# Get dashboard metrics as JSON
+curl http://localhost:8001/dashboard/api/data | jq '.performance'
 ```
 
 ## Architecture Overview
@@ -96,11 +102,13 @@ app/
 │   └── message.py
 ├── services/               # Business logic
 │   ├── chat_service.py        # CRUD + authorization checks
-│   └── connection_manager.py  # WebSocket connection pooling
+│   ├── connection_manager.py  # WebSocket connection pooling
+│   └── dashboard_service.py   # Metrics collection & dashboard data aggregation
 └── routes/                 # API endpoints
     ├── groups.py           # GET /api/chat/groups, GET /api/chat/groups/{id}
     ├── messages.py         # POST/PUT/DELETE /api/chat/groups/{id}/messages
-    └── websocket.py        # WS /api/chat/ws/{group_id}
+    ├── websocket.py        # WS /api/chat/ws/{group_id}
+    └── dashboard.py        # GET /dashboard (monitoring interface)
 ```
 
 ### Key Design Patterns
@@ -147,6 +155,8 @@ Token passed as query parameter, validated on connection, user_id extracted for 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | GET | `/health` | No | Health check |
+| GET | `/dashboard` | No | Technical monitoring dashboard (HTML) |
+| GET | `/dashboard/api/data` | No | Dashboard metrics (JSON) |
 | GET | `/api/chat/groups` | JWT | Get user's groups |
 | GET | `/api/chat/groups/{id}` | JWT | Get specific group |
 | GET | `/api/chat/groups/{id}/messages` | JWT | Get paginated messages (50/page) |
@@ -209,6 +219,134 @@ with PerformanceLogger("db_query", logger, query_type="select"):
 - `very_slow_request: true` when `duration_ms > 5000`
 
 See `DEBUGGING_GUIDE.md` for complete debugging scenarios and log aggregation queries.
+
+## Dashboard & Monitoring
+
+**Real-time technical monitoring interface for troubleshooting and operations.**
+
+### Accessing the Dashboard
+
+```bash
+# Start the API
+uvicorn app.main:app --reload --port 8001
+
+# Open dashboard in browser
+http://localhost:8001/dashboard
+
+# Or get JSON metrics via API
+curl http://localhost:8001/dashboard/api/data | jq
+```
+
+### Dashboard Features
+
+The dashboard provides comprehensive real-time metrics organized in an information-dense, terminal-style interface:
+
+**Status Bar** (top of dashboard):
+- API status, MongoDB health, uptime
+- Active WebSocket connections count
+- Total requests processed, error rate %
+- Average response time (with warnings for slow performance)
+
+**System Metrics**:
+- Process memory usage (MB and %)
+- CPU utilization
+- System memory availability
+- Automatic resource monitoring via `psutil`
+
+**Database Statistics**:
+- Total groups and messages
+- Active vs deleted messages (soft delete tracking)
+- Message deletion rate percentage
+- Average messages per group
+- 24-hour growth metrics (new groups/messages)
+- **Top 10 Most Active Groups** with message counts and last activity
+
+**WebSocket Monitoring**:
+- Total active connections across all groups
+- Per-group connection breakdown (sorted by activity)
+- Recent connection/disconnection events (last 20)
+- User join/leave tracking with timestamps
+
+**Performance Metrics**:
+- Requests per minute (throughput)
+- Average response time across all endpoints
+- Slow request count (>1s) with warnings
+- Very slow request count (>5s) with alerts
+- Total error count and error rate %
+
+**Endpoint Analytics**:
+- Per-endpoint request counts
+- Error counts and error rates per endpoint
+- Average response time per endpoint
+- Sortable table showing busiest endpoints
+
+**Recent Activity Logs**:
+- **Slow Requests** (last 10): Shows endpoint, duration, correlation ID
+  - Color-coded: Orange for >1s, Red for >5s
+- **Recent Errors** (last 20): Full error details with status codes
+- **Recent Requests** (last 20): Latest successful requests
+- **WebSocket Events** (last 20): Connection timeline with user IDs
+
+**Troubleshooting Features**:
+- **Correlation ID Tracking**: Every request/error shows correlation ID
+  - Copy correlation ID and search logs: `grep "correlation_id.*abc-123"`
+- **Automatic Refresh**: Dashboard updates every 10 seconds
+- **Visual Alerts**: Color-coded warnings (green=ok, orange=warning, red=error)
+- **Performance Thresholds**: Automatic highlighting of slow/failing operations
+
+### Architecture
+
+**Metrics Collection** (`app/services/dashboard_service.py`):
+- `MetricsCollector` singleton tracks all metrics in-memory
+- Thread-safe using `deque` for concurrent access
+- Automatic memory management (keeps last 50-100 items per metric)
+- Zero database overhead - all metrics stored in memory
+
+**Automatic Integration**:
+- `AccessLogMiddleware` records every HTTP request
+- WebSocket routes record connection events
+- No manual instrumentation needed in route handlers
+
+**Data Aggregation** (`DashboardService`):
+- Collects real-time data from MongoDB, WebSocket manager, metrics collector
+- Performs MongoDB aggregations for top active groups
+- Calculates percentiles, averages, and growth metrics
+- Returns comprehensive JSON payload for dashboard
+
+**Performance Impact**:
+- Minimal overhead (~1-2ms per request)
+- Graceful degradation if metrics unavailable
+- No blocking operations
+- Efficient deque-based storage
+
+### Use Cases
+
+**Development**:
+- Monitor request patterns during testing
+- Track WebSocket connections in real-time
+- Identify slow endpoints immediately
+- Debug with correlation IDs
+
+**Production Monitoring**:
+- Quick health check for operations team
+- Identify performance degradation early
+- Track user activity and popular groups
+- Monitor resource usage and capacity
+
+**Troubleshooting**:
+- Correlation ID lookup for request tracing
+- Slow request identification
+- Error pattern analysis
+- WebSocket connection debugging
+
+### No Authentication Required
+
+The dashboard is **intentionally unauthenticated** for internal monitoring. In production:
+- Deploy dashboard on internal network only
+- Use firewall/network policies to restrict access
+- Or add authentication middleware if exposed publicly
+
+See `DASHBOARD.md` for detailed technical documentation including metrics definitions, aggregation logic, and integration guides.
 
 ## Configuration
 

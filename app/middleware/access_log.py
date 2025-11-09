@@ -25,6 +25,14 @@ from structlog.contextvars import bind_contextvars, clear_contextvars
 
 logger = structlog.get_logger(__name__)
 
+# Import metrics collector for dashboard
+try:
+    from app.services.dashboard_service import metrics_collector
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+    logger.warning("metrics_collector_unavailable", message="Dashboard metrics will not be collected")
+
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
     """
@@ -149,6 +157,19 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                     duration_ms=round(duration_ms, 2),
                     user_id=user_id,
                 )
+
+            # Record metrics for dashboard
+            if METRICS_AVAILABLE:
+                try:
+                    metrics_collector.record_request(
+                        endpoint=path,
+                        method=method,
+                        duration_ms=duration_ms,
+                        status_code=status_code,
+                        correlation_id=correlation_id
+                    )
+                except Exception as e:
+                    logger.warning("metrics_recording_failed", error=str(e))
 
             # Clear structlog context variables for next request
             clear_contextvars()

@@ -37,6 +37,7 @@ redis==5.0.1  # Redis client for caching
 
 # Monitoring & Metrics
 prometheus-fastapi-instrumentator==6.1.0  # Prometheus metrics
+psutil==5.9.8  # System and process utilities for dashboard metrics
 
 # Testing (development only)
 pytest==7.4.3
