@@ -17,7 +17,9 @@ class Message(Document):
         indexes = [
             "group_id",
             "sender_id",
-            [("group_id", 1), ("created_at", -1)],  # Compound index for pagination
+            # Compound index optimized for filtered pagination queries
+            # This index supports: filtering by group_id, excluding deleted messages, and sorting by date
+            [("group_id", 1), ("is_deleted", 1), ("created_at", -1)],
         ]
 
     class Config:

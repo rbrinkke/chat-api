@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, status
 from app.middleware.auth import get_current_user
 from app.services.chat_service import ChatService
+from app.dependencies import get_chat_service
 from app.schemas.group import GroupResponse, GroupListResponse
 from app.core.logging_config import get_logger
 from bson import ObjectId
@@ -15,12 +16,12 @@ logger = get_logger(__name__)
     status_code=status.HTTP_200_OK
 )
 async def get_user_groups(
-    current_user: str = Depends(get_current_user)
+    current_user: str = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service)
 ):
     """Get all groups the current user has access to."""
     logger.info("api_get_groups", user_id=current_user)
 
-    chat_service = ChatService()
     groups = await chat_service.get_user_groups(current_user)
 
     return GroupListResponse(
@@ -45,12 +46,12 @@ async def get_user_groups(
 )
 async def get_group(
     group_id: str,
-    current_user: str = Depends(get_current_user)
+    current_user: str = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service)
 ):
     """Get a specific group by ID."""
     logger.info("api_get_group", group_id=group_id, user_id=current_user)
 
-    chat_service = ChatService()
     group = await chat_service.get_group(group_id, current_user)
 
     return GroupResponse(

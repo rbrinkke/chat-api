@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     MONGODB_URL: str = "mongodb://localhost:27017"
     DATABASE_NAME: str = "chat_db"
 
+    # Redis (optional - for caching)
+    REDIS_URL: str = ""  # Example: "redis://localhost:6379/0"
+
     # JWT Authentication
     JWT_SECRET: str = "your-secret-key-change-in-production"
     JWT_ALGORITHM: str = "HS256"
