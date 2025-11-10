@@ -3,6 +3,7 @@ from fastapi import WebSocket
 import json
 import asyncio
 from app.core.logging_config import get_logger
+from app.core import metrics
 
 logger = get_logger(__name__)
 
@@ -22,12 +23,34 @@ class ConnectionManager:
             self.active_connections[group_id] = set()
 
         self.active_connections[group_id].add(websocket)
+
+        # Update Prometheus metrics
+        metrics.websocket_connections_total.labels(group_id=group_id).inc()
+        metrics.websocket_connections_active.labels(group_id=group_id).set(
+            len(self.active_connections[group_id])
+        )
+
         logger.info(f"WebSocket connected to group {group_id}. Total: {len(self.active_connections[group_id])}")
 
-    def disconnect(self, websocket: WebSocket, group_id: str):
+    def disconnect(self, websocket: WebSocket, group_id: str, reason: str = "normal"):
         """Unregister a WebSocket connection."""
         if group_id in self.active_connections:
             self.active_connections[group_id].discard(websocket)
+
+            # Update Prometheus metrics
+            metrics.websocket_disconnections_total.labels(
+                group_id=group_id,
+                reason=reason
+            ).inc()
+
+            # Update active connections gauge
+            if self.active_connections[group_id]:
+                metrics.websocket_connections_active.labels(group_id=group_id).set(
+                    len(self.active_connections[group_id])
+                )
+            else:
+                # No more connections, set to 0
+                metrics.websocket_connections_active.labels(group_id=group_id).set(0)
 
             # Clean up empty groups
             if not self.active_connections[group_id]:
@@ -71,10 +94,19 @@ class ConnectionManager:
             return_exceptions=False  # We handle exceptions inside send_to_connection
         )
 
+        # Track successful broadcast
+        metrics.websocket_messages_broadcast_total.labels(group_id=group_id).inc()
+
         # Clean up any failed connections
+        error_count = 0
         for websocket, error in results:
             if error is not None:
-                self.disconnect(websocket, group_id)
+                error_count += 1
+                self.disconnect(websocket, group_id, reason="broadcast_error")
+
+        # Track broadcast errors
+        if error_count > 0:
+            metrics.websocket_broadcast_errors_total.labels(group_id=group_id).inc(error_count)
 
     def get_group_connection_count(self, group_id: str) -> int:
         """Get the number of active connections for a group."""

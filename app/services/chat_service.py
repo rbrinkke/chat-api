@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import List, Tuple
+import time
 from bson import ObjectId
 from bson.errors import InvalidId
 from app.models.group import Group
@@ -8,6 +9,7 @@ from app.core.exceptions import NotFoundError, ForbiddenError, BadRequestError
 from app.core.cache import cache, serialize_for_cache, deserialize_from_cache
 from app.core.logging_config import get_logger
 from app.services.connection_manager import manager
+from app.core import metrics
 
 logger = get_logger(__name__)
 
@@ -42,39 +44,68 @@ class ChatService:
         content: str
     ) -> Message:
         """Create a new message in a group."""
-        # Verify user has access to the group
-        group = await self._get_group_and_verify_access(group_id, sender_id)
+        start_time = time.time()
 
-        # Create message
-        message = Message(
-            group_id=group_id,
-            sender_id=sender_id,
-            content=content,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        await message.insert()
+        try:
+            # Verify user has access to the group
+            group = await self._get_group_and_verify_access(group_id, sender_id)
 
-        logger.info(f"Message created: {message.id} in group {group_id} by {sender_id}")
+            # Create message
+            message = Message(
+                group_id=group_id,
+                sender_id=sender_id,
+                content=content,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            await message.insert()
 
-        # Broadcast via WebSocket
-        await manager.broadcast_to_group(
-            group_id,
-            {
-                "type": "new_message",
-                "message": {
-                    "id": str(message.id),
-                    "group_id": message.group_id,
-                    "sender_id": message.sender_id,
-                    "content": message.content,
-                    "created_at": message.created_at.isoformat(),
-                    "updated_at": message.updated_at.isoformat(),
-                    "is_deleted": message.is_deleted
+            # Track MongoDB operation
+            metrics.mongodb_operations_total.labels(
+                operation="insert",
+                collection="messages",
+                status="success"
+            ).inc()
+
+            logger.info(f"Message created: {message.id} in group {group_id} by {sender_id}")
+
+            # Broadcast via WebSocket
+            await manager.broadcast_to_group(
+                group_id,
+                {
+                    "type": "new_message",
+                    "message": {
+                        "id": str(message.id),
+                        "group_id": message.group_id,
+                        "sender_id": message.sender_id,
+                        "content": message.content,
+                        "created_at": message.created_at.isoformat(),
+                        "updated_at": message.updated_at.isoformat(),
+                        "is_deleted": message.is_deleted
+                    }
                 }
-            }
-        )
+            )
 
-        return message
+            # Track successful message creation
+            metrics.messages_created_total.labels(group_id=group_id).inc()
+
+            return message
+
+        except Exception as e:
+            # Track errors
+            metrics.message_operation_errors_total.labels(
+                operation="create",
+                error_type=type(e).__name__
+            ).inc()
+            raise
+
+        finally:
+            # Track operation duration
+            duration = time.time() - start_time
+            metrics.message_operation_duration_seconds.labels(
+                operation="create",
+                group_id=group_id
+            ).observe(duration)
 
     async def get_messages(
         self,
@@ -141,41 +172,70 @@ class ChatService:
         new_content: str
     ) -> Message:
         """Update a message (only by sender)."""
-        # Get message
-        message_id_obj = validate_object_id(message_id, "message")
-        message = await Message.get(message_id_obj)
-        if not message:
-            raise NotFoundError("Message not found")
+        start_time = time.time()
 
-        # Verify sender
-        if message.sender_id != user_id:
-            raise ForbiddenError("You can only update your own messages")
+        try:
+            # Get message
+            message_id_obj = validate_object_id(message_id, "message")
+            message = await Message.get(message_id_obj)
+            if not message:
+                raise NotFoundError("Message not found")
 
-        # Update message
-        message.content = new_content
-        message.updated_at = datetime.utcnow()
-        await message.save()
+            # Verify sender
+            if message.sender_id != user_id:
+                raise ForbiddenError("You can only update your own messages")
 
-        logger.info(f"Message updated: {message_id} by {user_id}")
+            # Update message
+            message.content = new_content
+            message.updated_at = datetime.utcnow()
+            await message.save()
 
-        # Broadcast via WebSocket
-        await manager.broadcast_to_group(
-            message.group_id,
-            {
-                "type": "message_updated",
-                "message": {
-                    "id": str(message.id),
-                    "group_id": message.group_id,
-                    "sender_id": message.sender_id,
-                    "content": message.content,
-                    "created_at": message.created_at.isoformat(),
-                    "updated_at": message.updated_at.isoformat(),
-                    "is_deleted": message.is_deleted
+            # Track MongoDB operation
+            metrics.mongodb_operations_total.labels(
+                operation="update",
+                collection="messages",
+                status="success"
+            ).inc()
+
+            logger.info(f"Message updated: {message_id} by {user_id}")
+
+            # Broadcast via WebSocket
+            await manager.broadcast_to_group(
+                message.group_id,
+                {
+                    "type": "message_updated",
+                    "message": {
+                        "id": str(message.id),
+                        "group_id": message.group_id,
+                        "sender_id": message.sender_id,
+                        "content": message.content,
+                        "created_at": message.created_at.isoformat(),
+                        "updated_at": message.updated_at.isoformat(),
+                        "is_deleted": message.is_deleted
+                    }
                 }
-            }
-        )
+            )
 
-        return message
+            # Track successful update
+            metrics.messages_updated_total.labels(group_id=message.group_id).inc()
+
+            return message
+
+        except Exception as e:
+            # Track errors
+            metrics.message_operation_errors_total.labels(
+                operation="update",
+                error_type=type(e).__name__
+            ).inc()
+            raise
+
+        finally:
+            # Track operation duration
+            duration = time.time() - start_time
+            metrics.message_operation_duration_seconds.labels(
+                operation="update",
+                group_id=message.group_id if 'message' in locals() else "unknown"
+            ).observe(duration)
 
     async def delete_message(
         self,
@@ -183,31 +243,60 @@ class ChatService:
         user_id: str
     ):
         """Soft delete a message (only by sender)."""
-        # Get message
-        message_id_obj = validate_object_id(message_id, "message")
-        message = await Message.get(message_id_obj)
-        if not message:
-            raise NotFoundError("Message not found")
+        start_time = time.time()
 
-        # Verify sender
-        if message.sender_id != user_id:
-            raise ForbiddenError("You can only delete your own messages")
+        try:
+            # Get message
+            message_id_obj = validate_object_id(message_id, "message")
+            message = await Message.get(message_id_obj)
+            if not message:
+                raise NotFoundError("Message not found")
 
-        # Soft delete
-        message.is_deleted = True
-        message.updated_at = datetime.utcnow()
-        await message.save()
+            # Verify sender
+            if message.sender_id != user_id:
+                raise ForbiddenError("You can only delete your own messages")
 
-        logger.info(f"Message deleted: {message_id} by {user_id}")
+            # Soft delete
+            message.is_deleted = True
+            message.updated_at = datetime.utcnow()
+            await message.save()
 
-        # Broadcast via WebSocket
-        await manager.broadcast_to_group(
-            message.group_id,
-            {
-                "type": "message_deleted",
-                "message_id": str(message.id)
-            }
-        )
+            # Track MongoDB operation
+            metrics.mongodb_operations_total.labels(
+                operation="update",
+                collection="messages",
+                status="success"
+            ).inc()
+
+            logger.info(f"Message deleted: {message_id} by {user_id}")
+
+            # Broadcast via WebSocket
+            await manager.broadcast_to_group(
+                message.group_id,
+                {
+                    "type": "message_deleted",
+                    "message_id": str(message.id)
+                }
+            )
+
+            # Track successful deletion
+            metrics.messages_deleted_total.labels(group_id=message.group_id).inc()
+
+        except Exception as e:
+            # Track errors
+            metrics.message_operation_errors_total.labels(
+                operation="delete",
+                error_type=type(e).__name__
+            ).inc()
+            raise
+
+        finally:
+            # Track operation duration
+            duration = time.time() - start_time
+            metrics.message_operation_duration_seconds.labels(
+                operation="delete",
+                group_id=message.group_id if 'message' in locals() else "unknown"
+            ).observe(duration)
 
     async def get_group(self, group_id: str, user_id: str) -> Group:
         """Get a group by ID."""
