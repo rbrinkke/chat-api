@@ -125,6 +125,7 @@ async def health_check():
 
     Returns 200 if all checks pass, 503 if any critical component fails.
     """
+    from datetime import datetime
     from app.models.group import Group
     from fastapi.responses import JSONResponse
 
@@ -160,6 +161,8 @@ async def health_check():
 
     response_data = {
         "status": overall_status,
+        "service": "chat-api",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "checks": checks

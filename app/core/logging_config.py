@@ -28,10 +28,12 @@ def add_app_context(logger: Any, method_name: str, event_dict: EventDict) -> Eve
     Add application context to every log entry.
 
     This processor enriches logs with:
+    - Service name (for observability stack filtering)
     - Application name
     - Environment (dev/staging/prod)
     - Service version
     """
+    event_dict["service"] = "chat-api"  # Fixed service name for observability stack
     event_dict["app"] = settings.APP_NAME
     event_dict["version"] = settings.APP_VERSION
     event_dict["environment"] = settings.ENVIRONMENT
@@ -46,6 +48,21 @@ def add_severity_level(logger: Any, method_name: str, event_dict: EventDict) -> 
     """
     if "level" in event_dict:
         event_dict["severity"] = event_dict["level"].upper()
+    return event_dict
+
+
+def add_trace_id_alias(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
+    """
+    Add trace_id as an alias for correlation_id for observability stack compatibility.
+
+    The observability stack expects 'trace_id' field, while our internal
+    middleware uses 'correlation_id'. This processor ensures both are present.
+    """
+    if "correlation_id" in event_dict:
+        event_dict["trace_id"] = event_dict["correlation_id"]
+    elif "request_id" in event_dict:
+        event_dict["trace_id"] = event_dict["request_id"]
+
     return event_dict
 
 
@@ -95,8 +112,9 @@ def setup_logging() -> None:
         structlog.stdlib.add_log_level,           # Add log level
         structlog.stdlib.add_logger_name,         # Add logger name
         structlog.processors.TimeStamper(fmt="iso", utc=True),  # ISO timestamp
-        add_app_context,                          # Add app metadata
+        add_app_context,                          # Add app metadata (includes service field)
         add_severity_level,                       # Add severity field
+        add_trace_id_alias,                       # Add trace_id alias for observability stack
         censor_sensitive_data,                    # Security: redact sensitive data
         structlog.processors.StackInfoRenderer(), # Add stack traces when available
         structlog.processors.format_exc_info,     # Format exceptions

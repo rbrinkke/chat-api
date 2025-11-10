@@ -52,26 +52,55 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+
+    # Network configuration - join observability stack
+    networks:
+      - default
+      - activity-observability
+
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
+      start_period: 40s
 
-    # Logging configuration for Docker
+    # Logging configuration for Docker + Loki collection
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
         labels: "service,environment"
+
+    # Observability stack labels - auto-discovery for Prometheus & Loki
     labels:
+      # Service identification
       service: "chat-api"
       environment: "development"
+
+      # Prometheus scraping configuration
+      prometheus.scrape: "true"
+      prometheus.port: "8001"
+      prometheus.path: "/metrics"
+
+      # Loki log collection
+      loki.collect: "true"
 
 volumes:
   mongodb_data:
     driver: local
+
+# Networks
+networks:
+  # Default network for internal services (MongoDB, etc.)
+  default:
+    driver: bridge
+
+  # External observability stack network
+  activity-observability:
+    external: true
+    name: activity-observability
 
 # Production deployment notes:
 #

@@ -49,18 +49,25 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # Generate or extract correlation ID
-        correlation_id = request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        # Generate or extract trace ID (check multiple header variations)
+        trace_id = (
+            request.headers.get("X-Trace-ID") or
+            request.headers.get("X-Correlation-ID") or
+            request.headers.get("X-Request-ID") or
+            str(uuid.uuid4())
+        )
 
-        # Bind correlation ID to structlog context for the entire request lifecycle
+        # Bind trace ID to structlog context for the entire request lifecycle
         # This makes it available to all logs generated during this request
         bind_contextvars(
-            correlation_id=correlation_id,
-            request_id=correlation_id,  # Alias for compatibility
+            correlation_id=trace_id,     # Internal field name
+            request_id=trace_id,         # Alias for compatibility
+            trace_id=trace_id,           # Observability stack field name
         )
 
         # Add to request state for access in route handlers
-        request.state.correlation_id = correlation_id
+        request.state.correlation_id = trace_id
+        request.state.trace_id = trace_id
 
         # Start performance timer
         start_time = time.perf_counter()
@@ -166,7 +173,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                         method=method,
                         duration_ms=duration_ms,
                         status_code=status_code,
-                        correlation_id=correlation_id
+                        correlation_id=trace_id
                     )
                 except Exception as e:
                     logger.warning("metrics_recording_failed", error=str(e))
@@ -174,10 +181,11 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             # Clear structlog context variables for next request
             clear_contextvars()
 
-        # Add correlation ID to response headers for client-side tracing
+        # Add trace ID to response headers for client-side tracing and observability
         if response:
-            response.headers["X-Correlation-ID"] = correlation_id
-            response.headers["X-Request-ID"] = correlation_id
+            response.headers["X-Trace-ID"] = trace_id           # Primary header for observability stack
+            response.headers["X-Correlation-ID"] = trace_id     # Backward compatibility
+            response.headers["X-Request-ID"] = trace_id         # Additional alias
 
         return response
 
