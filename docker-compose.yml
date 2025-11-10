@@ -12,6 +12,8 @@ services:
       - "27019:27017"
     volumes:
       - mongodb_data:/data/db
+    networks:
+      - activity-network
     healthcheck:
       test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/chat_db --quiet
       interval: 10s
@@ -53,9 +55,9 @@ services:
       mongodb:
         condition: service_healthy
 
-    # Network configuration - join observability stack
+    # Network configuration - join activity and observability networks
     networks:
-      - default
+      - activity-network
       - activity-observability
 
     healthcheck:
@@ -93,14 +95,13 @@ volumes:
 
 # Networks
 networks:
-  # Default network for internal services (MongoDB, etc.)
-  default:
-    driver: bridge
+  # Central activity network for all services
+  activity-network:
+    external: true
 
-  # External observability stack network
+  # External observability stack network for metrics/logs
   activity-observability:
     external: true
-    name: activity-observability
 
 # Production deployment notes:
 #
