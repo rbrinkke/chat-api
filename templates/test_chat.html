@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat API Test Harness</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes pulse-green {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .status-pulse {
+            animation: pulse-green 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        .chat-message {
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .scroll-smooth {
+            scroll-behavior: smooth;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 min-h-screen">
+    <div class="container mx-auto max-w-6xl p-4">
+        <!-- Header -->
+        <div class="bg-gradient-to-r from-blue-600 to-purple-600 rounded-t-lg shadow-2xl p-6 mb-0">
+            <h1 class="text-3xl font-bold text-white mb-2 flex items-center">
+                <svg class="w-8 h-8 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                </svg>
+                Chat API Test Harness
+            </h1>
+            <p class="text-blue-100">Production-grade testing interface for WebSocket, RBAC, and real-time messaging</p>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="bg-gray-800 border-x-2 border-gray-700 p-4">
+            <div class="flex items-center justify-between flex-wrap gap-4">
+                <div class="flex items-center space-x-2">
+                    <div id="statusIndicator" class="w-3 h-3 rounded-full bg-red-500"></div>
+                    <span id="statusText" class="text-gray-300 font-medium">Disconnected</span>
+                </div>
+                <div id="userInfo" class="text-sm text-gray-400 hidden">
+                    <span class="font-semibold text-blue-400">User:</span> <span id="userId">-</span>
+                    <span class="ml-4 font-semibold text-purple-400">Org:</span> <span id="orgId">-</span>
+                </div>
+                <div class="text-sm text-gray-400">
+                    <span class="font-semibold">Messages:</span> <span id="messageCount">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-0">
+            <!-- Left Sidebar - Connection & Controls -->
+            <div class="lg:col-span-1 bg-gray-800 border-x-2 border-b-2 lg:border-r-0 border-gray-700 p-6 space-y-6">
+                <!-- Connection Panel -->
+                <div class="bg-gray-900 rounded-lg p-4 shadow-lg border border-gray-700">
+                    <h2 class="text-xl font-bold text-white mb-4 flex items-center">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                        Connection
+                    </h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-1">JWT Token</label>
+                            <textarea
+                                id="jwtToken"
+                                placeholder="Paste JWT token from auth-api..."
+                                class="w-full bg-gray-800 border border-gray-600 text-white rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition resize-none"
+                                rows="3"
+                            ></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-1">Group ID</label>
+                            <input
+                                type="text"
+                                id="groupId"
+                                placeholder="Enter group ID..."
+                                class="w-full bg-gray-800 border border-gray-600 text-white rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+                            >
+                        </div>
+                        <button
+                            id="connectButton"
+                            class="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-2 px-4 rounded-md transition transform hover:scale-105 shadow-lg"
+                        >
+                            Connect
+                        </button>
+                        <button
+                            id="disconnectButton"
+                            class="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold py-2 px-4 rounded-md transition transform hover:scale-105 shadow-lg hidden"
+                        >
+                            Disconnect
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Message Actions Panel -->
+                <div class="bg-gray-900 rounded-lg p-4 shadow-lg border border-gray-700">
+                    <h2 class="text-xl font-bold text-white mb-4 flex items-center">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
+                        </svg>
+                        Actions
+                    </h2>
+                    <div class="space-y-3">
+                        <button
+                            id="loadMessagesButton"
+                            class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled
+                        >
+                            Load Messages
+                        </button>
+                        <button
+                            id="clearChatButton"
+                            class="w-full bg-gray-700 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition"
+                        >
+                            Clear Chat Log
+                        </button>
+                    </div>
+                </div>
+
+                <!-- RBAC Test Panel -->
+                <div class="bg-gray-900 rounded-lg p-4 shadow-lg border border-gray-700">
+                    <h2 class="text-xl font-bold text-white mb-4 flex items-center">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                        </svg>
+                        RBAC Tests
+                    </h2>
+                    <div class="space-y-2 text-sm">
+                        <div class="bg-gray-800 rounded p-3 border border-gray-700">
+                            <div class="text-gray-400 mb-1">Permissions Required:</div>
+                            <div class="space-y-1 text-xs">
+                                <div class="text-green-400">✓ chat:read - View messages</div>
+                                <div class="text-yellow-400">✓ chat:write - Send messages</div>
+                                <div class="text-orange-400">✓ chat:update - Edit messages</div>
+                                <div class="text-red-400">✓ chat:delete - Delete messages</div>
+                            </div>
+                        </div>
+                        <div class="text-xs text-gray-500 leading-relaxed">
+                            Test RBAC by connecting with different user tokens and attempting various actions.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Instructions -->
+                <div class="bg-blue-900/30 rounded-lg p-4 border border-blue-700/50">
+                    <h3 class="text-sm font-bold text-blue-300 mb-2">Quick Start</h3>
+                    <ol class="text-xs text-blue-200 space-y-1 list-decimal list-inside">
+                        <li>Get JWT token from auth-api</li>
+                        <li>Create or get a group ID</li>
+                        <li>Paste token and group ID above</li>
+                        <li>Click Connect</li>
+                        <li>Open another window for multi-user test</li>
+                    </ol>
+                </div>
+            </div>
+
+            <!-- Right Side - Chat Interface -->
+            <div class="lg:col-span-2 bg-gray-800 border-x-2 border-b-2 border-gray-700 flex flex-col" style="height: calc(100vh - 250px); min-height: 600px;">
+                <!-- Chat Header -->
+                <div class="bg-gray-900 p-4 border-b border-gray-700">
+                    <h2 class="text-xl font-bold text-white flex items-center">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"></path>
+                        </svg>
+                        Chat Log
+                    </h2>
+                </div>
+
+                <!-- Messages Container -->
+                <div id="messages" class="flex-1 overflow-y-auto p-4 space-y-2 bg-gray-900 scroll-smooth">
+                    <div class="text-center text-gray-500 text-sm py-8">
+                        <svg class="w-16 h-16 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                        </svg>
+                        <p>No messages yet. Connect to start chatting!</p>
+                    </div>
+                </div>
+
+                <!-- Message Input -->
+                <div class="bg-gray-900 border-t border-gray-700 p-4">
+                    <div class="flex space-x-2">
+                        <input
+                            type="text"
+                            id="messageInput"
+                            placeholder="Type your message... (Press Enter to send)"
+                            class="flex-1 bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled
+                        >
+                        <button
+                            id="sendButton"
+                            class="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold px-6 py-3 rounded-lg transition transform hover:scale-105 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                            disabled
+                        >
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="mt-2 text-xs text-gray-500">
+                        <span id="typingIndicator" class="hidden">
+                            <span class="inline-flex items-center">
+                                <span class="animate-pulse">Someone is typing...</span>
+                            </span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="bg-gray-800 border-x-2 border-b-2 border-gray-700 rounded-b-lg p-4 text-center text-gray-400 text-sm">
+            <div class="flex items-center justify-center space-x-4">
+                <span>Chat API v1.0</span>
+                <span class="text-gray-600">|</span>
+                <span>WebSocket Status: <span id="wsStatus" class="font-semibold text-red-400">Closed</span></span>
+                <span class="text-gray-600">|</span>
+                <a href="/dashboard" class="text-blue-400 hover:text-blue-300 transition">Dashboard</a>
+                <span class="text-gray-600">|</span>
+                <a href="/docs" class="text-blue-400 hover:text-blue-300 transition">API Docs</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let ws = null;
+        let currentGroupId = null;
+        let currentUserId = null;
+        let currentToken = null;
+        let messageCount = 0;
+        let isConnected = false;
+
+        // DOM elements
+        const connectButton = document.getElementById('connectButton');
+        const disconnectButton = document.getElementById('disconnectButton');
+        const sendButton = document.getElementById('sendButton');
+        const loadMessagesButton = document.getElementById('loadMessagesButton');
+        const clearChatButton = document.getElementById('clearChatButton');
+        const messageInput = document.getElementById('messageInput');
+        const messagesDiv = document.getElementById('messages');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const statusText = document.getElementById('statusText');
+        const wsStatus = document.getElementById('wsStatus');
+        const jwtTokenInput = document.getElementById('jwtToken');
+        const groupIdInput = document.getElementById('groupId');
+        const userIdSpan = document.getElementById('userId');
+        const orgIdSpan = document.getElementById('orgId');
+        const userInfo = document.getElementById('userInfo');
+        const messageCountSpan = document.getElementById('messageCount');
+        const typingIndicator = document.getElementById('typingIndicator');
+
+        // Utility: Parse JWT token (client-side only, for display purposes)
+        function parseJWT(token) {
+            try {
+                const base64Url = token.split('.')[1];
+                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                }).join(''));
+                return JSON.parse(jsonPayload);
+            } catch (e) {
+                console.error('Failed to parse JWT:', e);
+                return null;
+            }
+        }
+
+        // Update UI status
+        function updateStatus(status, color) {
+            statusText.textContent = status;
+            statusIndicator.className = `w-3 h-3 rounded-full ${color}`;
+            if (color === 'bg-green-500') {
+                statusIndicator.classList.add('status-pulse');
+            }
+        }
+
+        // Add message to chat log
+        function addMessage(sender, content, type = 'message', timestamp = null) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'chat-message';
+
+            const time = timestamp ? new Date(timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+
+            if (type === 'system') {
+                msgDiv.innerHTML = `
+                    <div class="bg-blue-900/30 border border-blue-700/50 rounded-lg p-3 text-sm">
+                        <div class="flex items-center space-x-2">
+                            <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span class="text-blue-300">${content}</span>
+                            <span class="text-blue-500 text-xs ml-auto">${time}</span>
+                        </div>
+                    </div>
+                `;
+            } else if (type === 'error') {
+                msgDiv.innerHTML = `
+                    <div class="bg-red-900/30 border border-red-700/50 rounded-lg p-3 text-sm">
+                        <div class="flex items-center space-x-2">
+                            <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span class="text-red-300">${content}</span>
+                            <span class="text-red-500 text-xs ml-auto">${time}</span>
+                        </div>
+                    </div>
+                `;
+            } else if (type === 'event') {
+                msgDiv.innerHTML = `
+                    <div class="bg-purple-900/20 border border-purple-700/30 rounded-lg p-2 text-xs">
+                        <span class="text-purple-400">${content}</span>
+                        <span class="text-purple-600 ml-2">${time}</span>
+                    </div>
+                `;
+            } else {
+                const isCurrentUser = sender === currentUserId;
+                const bgColor = isCurrentUser ? 'bg-blue-600' : 'bg-gray-700';
+                const alignment = isCurrentUser ? 'ml-auto' : 'mr-auto';
+
+                msgDiv.innerHTML = `
+                    <div class="${alignment} max-w-md">
+                        <div class="${bgColor} rounded-lg p-3 shadow-lg">
+                            <div class="flex items-center space-x-2 mb-1">
+                                <span class="text-xs font-semibold text-white/80">${sender === currentUserId ? 'You' : sender}</span>
+                                <span class="text-xs text-white/50">${time}</span>
+                            </div>
+                            <div class="text-white break-words">${escapeHtml(content)}</div>
+                        </div>
+                    </div>
+                `;
+                messageCount++;
+                messageCountSpan.textContent = messageCount;
+            }
+
+            messagesDiv.appendChild(msgDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Clear welcome message
+        function clearWelcomeMessage() {
+            const firstChild = messagesDiv.firstElementChild;
+            if (firstChild && firstChild.querySelector('svg.w-16')) {
+                messagesDiv.innerHTML = '';
+            }
+        }
+
+        // Connect to WebSocket
+        connectButton.onclick = async () => {
+            const token = jwtTokenInput.value.trim();
+            const groupId = groupIdInput.value.trim();
+
+            if (!token || !groupId) {
+                addMessage('System', 'Please provide both JWT Token and Group ID', 'error');
+                return;
+            }
+
+            // Parse token to display user info
+            const payload = parseJWT(token);
+            if (payload) {
+                currentUserId = payload.sub;
+                userIdSpan.textContent = payload.sub;
+                orgIdSpan.textContent = payload.org_id || 'default-org';
+                userInfo.classList.remove('hidden');
+            }
+
+            currentToken = token;
+            currentGroupId = groupId;
+
+            // Construct WebSocket URL
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/api/chat/ws/${groupId}?token=${encodeURIComponent(token)}`;
+
+            addMessage('System', `Connecting to group ${groupId}...`, 'system');
+            updateStatus('Connecting...', 'bg-yellow-500');
+
+            try {
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    console.log('WebSocket connected!');
+                    clearWelcomeMessage();
+                    addMessage('System', 'Successfully connected to WebSocket', 'system');
+                    updateStatus('Connected', 'bg-green-500');
+                    wsStatus.textContent = 'Open';
+                    wsStatus.className = 'font-semibold text-green-400';
+
+                    isConnected = true;
+                    connectButton.classList.add('hidden');
+                    disconnectButton.classList.remove('hidden');
+                    messageInput.disabled = false;
+                    sendButton.disabled = false;
+                    loadMessagesButton.disabled = false;
+                    jwtTokenInput.disabled = true;
+                    groupIdInput.disabled = true;
+                };
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    console.log('Received:', data);
+
+                    switch (data.type) {
+                        case 'connected':
+                            addMessage('System', data.message, 'system');
+                            break;
+                        case 'new_message':
+                            const msg = data.message;
+                            addMessage(msg.sender_id, msg.content, 'message', msg.created_at);
+                            break;
+                        case 'message_updated':
+                            addMessage('System', `Message updated by ${data.message.sender_id}`, 'event');
+                            break;
+                        case 'message_deleted':
+                            addMessage('System', `Message deleted: ${data.message_id}`, 'event');
+                            break;
+                        case 'user_joined':
+                            addMessage('System', `User ${data.user_id} joined (${data.connection_count} connections)`, 'event');
+                            break;
+                        case 'user_left':
+                            addMessage('System', `User ${data.user_id} left (${data.connection_count} connections)`, 'event');
+                            break;
+                        case 'user_typing':
+                            if (data.user_id !== currentUserId) {
+                                showTypingIndicator();
+                            }
+                            break;
+                        case 'pong':
+                            console.log('Pong received');
+                            break;
+                        default:
+                            console.log('Unknown message type:', data.type);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    addMessage('System', 'WebSocket error occurred', 'error');
+                    updateStatus('Error', 'bg-red-500');
+                };
+
+                ws.onclose = (event) => {
+                    console.log('WebSocket closed:', event.code, event.reason);
+                    addMessage('System', `Connection closed (Code: ${event.code})`, 'system');
+                    updateStatus('Disconnected', 'bg-red-500');
+                    wsStatus.textContent = 'Closed';
+                    wsStatus.className = 'font-semibold text-red-400';
+
+                    resetUI();
+                };
+            } catch (error) {
+                console.error('Connection error:', error);
+                addMessage('System', `Failed to connect: ${error.message}`, 'error');
+                updateStatus('Error', 'bg-red-500');
+                resetUI();
+            }
+        };
+
+        // Disconnect
+        disconnectButton.onclick = () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                addMessage('System', 'Manually disconnected', 'system');
+            }
+            resetUI();
+        };
+
+        // Reset UI to initial state
+        function resetUI() {
+            isConnected = false;
+            connectButton.classList.remove('hidden');
+            disconnectButton.classList.add('hidden');
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+            loadMessagesButton.disabled = true;
+            jwtTokenInput.disabled = false;
+            groupIdInput.disabled = false;
+            ws = null;
+        }
+
+        // Send message via REST API
+        async function sendMessage() {
+            if (!isConnected || !currentToken || !currentGroupId) {
+                addMessage('System', 'Not connected. Please connect first.', 'error');
+                return;
+            }
+
+            const content = messageInput.value.trim();
+            if (!content) return;
+
+            try {
+                const response = await fetch(`/api/chat/groups/${currentGroupId}/messages`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${currentToken}`
+                    },
+                    body: JSON.stringify({ content })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+
+                messageInput.value = '';
+                console.log('Message sent successfully');
+            } catch (error) {
+                console.error('Send error:', error);
+                addMessage('System', `Failed to send message: ${error.message}`, 'error');
+            }
+        }
+
+        // Send button click
+        sendButton.onclick = sendMessage;
+
+        // Enter key to send
+        messageInput.onkeypress = (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        };
+
+        // Typing indicator
+        let typingTimeout;
+        messageInput.oninput = () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                clearTimeout(typingTimeout);
+                ws.send(JSON.stringify({ type: 'typing' }));
+            }
+        };
+
+        function showTypingIndicator() {
+            typingIndicator.classList.remove('hidden');
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                typingIndicator.classList.add('hidden');
+            }, 3000);
+        }
+
+        // Load messages from REST API
+        loadMessagesButton.onclick = async () => {
+            if (!currentToken || !currentGroupId) {
+                addMessage('System', 'Not connected', 'error');
+                return;
+            }
+
+            try {
+                addMessage('System', 'Loading messages...', 'system');
+                const response = await fetch(`/api/chat/groups/${currentGroupId}/messages?page=1&page_size=50`, {
+                    headers: {
+                        'Authorization': `Bearer ${currentToken}`
+                    }
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                clearWelcomeMessage();
+
+                if (data.messages && data.messages.length > 0) {
+                    addMessage('System', `Loaded ${data.messages.length} messages`, 'system');
+                    data.messages.forEach(msg => {
+                        if (!msg.is_deleted) {
+                            addMessage(msg.sender_id, msg.content, 'message', msg.created_at);
+                        }
+                    });
+                } else {
+                    addMessage('System', 'No messages found in this group', 'system');
+                }
+            } catch (error) {
+                console.error('Load error:', error);
+                addMessage('System', `Failed to load messages: ${error.message}`, 'error');
+            }
+        };
+
+        // Clear chat log
+        clearChatButton.onclick = () => {
+            messagesDiv.innerHTML = '';
+            messageCount = 0;
+            messageCountSpan.textContent = '0';
+            addMessage('System', 'Chat log cleared', 'system');
+        };
+
+        // Heartbeat to keep connection alive
+        setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000); // Ping every 30 seconds
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+        });
+
+        // Initial status
+        updateStatus('Disconnected', 'bg-red-500');
+    </script>
+</body>
+</html>
