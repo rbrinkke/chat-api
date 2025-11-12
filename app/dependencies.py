@@ -34,7 +34,7 @@ def get_chat_service() -> ChatService:
 # ==================== RBAC AUTHORIZATION DEPENDENCIES ====================
 
 
-def require_permission(permission: str):
+def require_permission(permission: str, custom_cache_ttl: int = None):
     """
     FastAPI dependency factory for permission checks.
 
@@ -48,8 +48,19 @@ def require_permission(permission: str):
             # auth_context contains user_id and org_id
             ...
 
+        # With custom cache TTL:
+        @router.post("/critical-operation")
+        async def critical_op(
+            auth_context: AuthContext = Depends(
+                require_permission("admin:critical", custom_cache_ttl=10)
+            )
+        ):
+            # Cache for only 10 seconds due to sensitivity
+            ...
+
     Args:
         permission: Permission string (e.g., "chat:send_message")
+        custom_cache_ttl: Optional custom cache TTL in seconds (overrides default TTL logic)
 
     Returns:
         Dependency function that checks permission
@@ -70,7 +81,8 @@ def require_permission(permission: str):
             result = await auth_service.check_permission(
                 org_id=auth_context.org_id,
                 user_id=auth_context.user_id,
-                permission=permission
+                permission=permission,
+                custom_cache_ttl=custom_cache_ttl
             )
 
             logger.info(
