@@ -401,7 +401,10 @@ class AuthAPIClient:
             )
             return None
 
-        # Make request
+        # Make request with timing
+        import time
+        start_time = time.perf_counter()
+
         try:
             response = await self.client.post(
                 self.endpoint,
@@ -411,6 +414,9 @@ class AuthAPIClient:
                     "permission": permission
                 }
             )
+
+            # Calculate latency
+            latency_ms = (time.perf_counter() - start_time) * 1000
 
             # Success responses
             if response.status_code == 200:
@@ -425,7 +431,9 @@ class AuthAPIClient:
                     org_id=org_id,
                     user_id=user_id,
                     permission=permission,
-                    allowed=allowed
+                    allowed=allowed,
+                    latency_ms=round(latency_ms, 2),
+                    slow_response=latency_ms > 500  # Flag slow Auth API responses
                 )
 
                 return allowed
@@ -443,7 +451,8 @@ class AuthAPIClient:
                     org_id=org_id,
                     user_id=user_id,
                     permission=permission,
-                    reason=reason
+                    reason=reason,
+                    latency_ms=round(latency_ms, 2)
                 )
 
                 return False
@@ -455,7 +464,8 @@ class AuthAPIClient:
                     status_code=response.status_code,
                     org_id=org_id,
                     user_id=user_id,
-                    permission=permission
+                    permission=permission,
+                    latency_ms=round(latency_ms, 2)
                 )
                 await self.circuit_breaker.record_failure()
                 return None
@@ -547,9 +557,19 @@ class AuthorizationService:
                     "permission_denied_cached",
                     org_id=org_id,
                     user_id=user_id,
-                    permission=permission
+                    permission=permission,
+                    source="cache"
                 )
                 raise ForbiddenError(f"Permission denied: {permission}")
+
+            # Log successful permission grant from cache
+            logger.info(
+                "permission_granted_cached",
+                org_id=org_id,
+                user_id=user_id,
+                permission=permission,
+                source="cache"
+            )
 
             return PermissionCheckResult(
                 allowed=True,
@@ -558,6 +578,14 @@ class AuthorizationService:
             )
 
         # Step 2: Cache miss - call Auth API
+        logger.debug(
+            "auth_cache_miss",
+            org_id=org_id,
+            user_id=user_id,
+            permission=permission,
+            message="Permission not in cache, calling Auth API"
+        )
+
         auth_api_result = await self.auth_api_client.check_permission(
             org_id, user_id, permission
         )
@@ -579,6 +607,15 @@ class AuthorizationService:
                     source="auth_api"
                 )
                 raise ForbiddenError(f"Permission denied: {permission}")
+
+            # Log successful permission grant from Auth API
+            logger.info(
+                "permission_granted",
+                org_id=org_id,
+                user_id=user_id,
+                permission=permission,
+                source="auth_api"
+            )
 
             return PermissionCheckResult(
                 allowed=True,

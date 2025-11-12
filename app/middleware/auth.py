@@ -39,14 +39,33 @@ async def get_current_user(
         # Extract user_id from payload
         user_id: str = payload.get("sub")
         if user_id is None:
-            logger.warning("Token missing 'sub' claim")
+            logger.warning("token_missing_sub_claim", message="Token missing 'sub' claim")
             raise UnauthorizedError("Invalid authentication credentials")
 
-        logger.debug(f"Authenticated user: {user_id}")
+        # Log expiration info for debugging
+        exp_timestamp = payload.get("exp")
+        if exp_timestamp:
+            from datetime import datetime
+            exp_datetime = datetime.fromtimestamp(exp_timestamp)
+            time_until_expiry = (exp_datetime - datetime.utcnow()).total_seconds()
+
+            logger.debug(
+                "user_authenticated",
+                user_id=user_id,
+                token_expires_in_seconds=round(time_until_expiry, 0)
+            )
+        else:
+            logger.debug("user_authenticated", user_id=user_id)
+
         return user_id
 
     except JWTError as e:
-        logger.warning(f"JWT validation failed: {e}")
+        logger.warning(
+            "jwt_validation_failed",
+            error_type=type(e).__name__,
+            error=str(e),
+            message="JWT token validation failed"
+        )
         raise UnauthorizedError("Invalid authentication credentials")
 
 
@@ -118,17 +137,38 @@ async def get_auth_context(
             email=email
         )
 
-        logger.debug(
-            "auth_context_extracted",
-            user_id=context.user_id,
-            org_id=context.org_id,
-            username=context.username
-        )
+        # Extract token expiration for debugging
+        exp_timestamp = payload.get("exp")
+        if exp_timestamp:
+            from datetime import datetime
+            exp_datetime = datetime.fromtimestamp(exp_timestamp)
+            time_until_expiry = (exp_datetime - datetime.utcnow()).total_seconds()
+
+            logger.debug(
+                "auth_context_extracted",
+                user_id=context.user_id,
+                org_id=context.org_id,
+                username=context.username,
+                token_expires_in_seconds=round(time_until_expiry, 0),
+                token_expiry_time=exp_datetime.isoformat()
+            )
+        else:
+            logger.debug(
+                "auth_context_extracted",
+                user_id=context.user_id,
+                org_id=context.org_id,
+                username=context.username
+            )
 
         return context
 
     except JWTError as e:
-        logger.warning(f"JWT validation failed: {e}")
+        logger.warning(
+            "jwt_validation_failed_auth_context",
+            error_type=type(e).__name__,
+            error=str(e),
+            message="JWT token validation failed during auth context extraction"
+        )
         raise UnauthorizedError("Invalid authentication credentials")
 
 

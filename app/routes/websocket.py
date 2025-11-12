@@ -173,12 +173,22 @@ async def websocket_endpoint(
                 )
             else:
                 # Echo back for now (messages are created via REST API)
-                logger.info(f"Received WebSocket message: {data}")
+                logger.info(
+                    "websocket_message_received",
+                    group_id=group_id,
+                    user_id=auth_context.user_id,
+                    message_type=data.get("type", "unknown")
+                )
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, group_id)
         connection_count = manager.get_group_connection_count(group_id)
-        logger.info(f"WebSocket disconnected from group {group_id}")
+        logger.info(
+            "websocket_disconnected",
+            group_id=group_id,
+            user_id=user_id if 'user_id' in locals() else "unknown",
+            connection_count=connection_count
+        )
 
         # Record disconnection event for dashboard
         if METRICS_AVAILABLE:
@@ -203,7 +213,14 @@ async def websocket_endpoint(
         )
 
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(
+            "websocket_error",
+            error_type=type(e).__name__,
+            error=str(e),
+            group_id=group_id,
+            user_id=user_id if 'user_id' in locals() else "unknown",
+            exc_info=True  # Include stack trace for debugging
+        )
         try:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         except:
