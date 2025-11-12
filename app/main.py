@@ -11,7 +11,7 @@ from app.core.cache import cache
 from app.core.authorization import get_authorization_service, close_authorization_service
 from app.db.mongodb import init_db
 from app.middleware.access_log import AccessLogMiddleware, RequestContextMiddleware
-from app.routes import groups, messages, websocket, dashboard
+from app.routes import groups, messages, websocket, dashboard, test_ui
 
 # Setup structured logging BEFORE any other imports that might log
 setup_logging()
@@ -130,6 +130,7 @@ app.include_router(groups.router, prefix=settings.API_PREFIX, tags=["groups"])
 app.include_router(messages.router, prefix=settings.API_PREFIX, tags=["messages"])
 app.include_router(websocket.router, prefix=settings.API_PREFIX, tags=["websocket"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+app.include_router(test_ui.router, tags=["test-ui"])
 
 
 # Health check endpoint
@@ -230,7 +231,8 @@ async def root():
         "version": settings.APP_VERSION,
         "docs": "/docs",
         "health": "/health",
-        "dashboard": "/dashboard"
+        "dashboard": "/dashboard",
+        "test_ui": "/test-chat"
     }
 
 
