@@ -42,5 +42,5 @@ psutil==5.9.8  # System and process utilities for dashboard metrics
 # Testing (development only)
 pytest==7.4.3
 pytest-asyncio==0.21.1
-httpx==0.25.2  # Async HTTP client for testing
+httpx==0.25.2  # Async HTTP client for testing and Auth API integration
 pytest-cov==4.1.0  # Code coverage

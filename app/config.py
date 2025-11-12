@@ -27,6 +27,27 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "your-secret-key-change-in-production"
     JWT_ALGORITHM: str = "HS256"
 
+    # ========== RBAC Authorization Settings ==========
+    # Auth API Integration
+    AUTH_API_URL: str = "http://auth-api:8000"
+    AUTH_API_TIMEOUT: float = 3.0  # seconds
+    AUTH_API_PERMISSION_CHECK_ENDPOINT: str = "/api/v1/authorization/check"
+
+    # Authorization Cache Settings
+    AUTH_CACHE_ENABLED: bool = True
+    AUTH_CACHE_TTL_READ: int = 300      # 5 minutes for read operations
+    AUTH_CACHE_TTL_WRITE: int = 60      # 1 minute for write operations
+    AUTH_CACHE_TTL_ADMIN: int = 30      # 30 seconds for admin operations
+    AUTH_CACHE_TTL_DENIED: int = 120    # 2 minutes for denied permissions (negative caching)
+
+    # Circuit Breaker Settings
+    CIRCUIT_BREAKER_THRESHOLD: int = 5           # Number of failures before circuit opens
+    CIRCUIT_BREAKER_TIMEOUT: int = 30            # Seconds circuit stays open
+    CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS: int = 3 # Max calls in HALF_OPEN state
+
+    # Fallback Behavior (CRITICAL SECURITY SETTING)
+    AUTH_FAIL_OPEN: bool = False  # False = Fail-Closed (secure), True = Fail-Open (dangerous)
+
     # Logging
     LOG_LEVEL: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
     LOG_JSON_FORMAT: bool = False  # Set to True in production for structured logging

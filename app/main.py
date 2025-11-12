@@ -8,6 +8,7 @@ from app.config import settings
 from app.core.logging_config import setup_logging, get_logger
 from app.core.rate_limit import limiter
 from app.core.cache import cache
+from app.core.authorization import get_authorization_service, close_authorization_service
 from app.db.mongodb import init_db
 from app.middleware.access_log import AccessLogMiddleware, RequestContextMiddleware
 from app.routes import groups, messages, websocket, dashboard
@@ -44,6 +45,22 @@ async def lifespan(app: FastAPI):
     # Initialize cache (optional, graceful degradation if Redis unavailable)
     await cache.initialize()
 
+    # Initialize authorization service
+    try:
+        auth_service = await get_authorization_service()
+        logger.info(
+            "authorization_service_initialized",
+            auth_api_url=settings.AUTH_API_URL,
+            cache_enabled=settings.AUTH_CACHE_ENABLED,
+            fail_open=settings.AUTH_FAIL_OPEN
+        )
+    except Exception as e:
+        logger.warning(
+            "authorization_service_initialization_warning",
+            error=str(e),
+            message="Authorization service initialization had issues but continuing..."
+        )
+
     yield
 
     # Shutdown
@@ -52,6 +69,9 @@ async def lifespan(app: FastAPI):
     # Gracefully close all WebSocket connections
     from app.services.connection_manager import manager
     await manager.shutdown_all()
+
+    # Close authorization service
+    await close_authorization_service()
 
     # Close cache connection
     await cache.close()
@@ -121,6 +141,7 @@ async def health_check():
     Verifies:
     - MongoDB connectivity
     - Redis connectivity (if configured)
+    - Auth API connectivity (for RBAC)
     - Overall application health
 
     Returns 200 if all checks pass, 503 if any critical component fails.
@@ -132,7 +153,8 @@ async def health_check():
     checks = {
         "application": "healthy",
         "mongodb": "unknown",
-        "redis": "unknown" if settings.REDIS_URL else "not_configured"
+        "redis": "unknown" if settings.REDIS_URL else "not_configured",
+        "auth_api": "unknown"
     }
 
     # Check MongoDB
@@ -152,9 +174,37 @@ async def health_check():
             logger.error("health_check_redis_failed", error=str(e))
             checks["redis"] = f"unhealthy: {type(e).__name__}"
 
+    # Check Auth API
+    try:
+        auth_service = await get_authorization_service()
+
+        # Simple connectivity test: check a dummy permission
+        # This will test Auth API + Circuit Breaker
+        test_result = await auth_service.auth_api_client.check_permission(
+            org_id="health-check",
+            user_id="health-check",
+            permission="health:check"
+        )
+
+        if test_result is None:
+            # Circuit breaker might be open or Auth API down
+            checks["auth_api"] = "degraded: circuit_breaker_open_or_unavailable"
+        else:
+            checks["auth_api"] = "healthy"
+
+    except Exception as e:
+        logger.error("health_check_auth_api_failed", error=str(e))
+        checks["auth_api"] = f"unhealthy: {type(e).__name__}"
+
     # Determine overall status
     critical_checks = [checks["mongodb"]]  # MongoDB is critical
-    all_healthy = all(status == "healthy" for status in critical_checks)
+    # Auth API is NOT critical if FAIL_OPEN is enabled
+    if not settings.AUTH_FAIL_OPEN:
+        critical_checks.append(checks["auth_api"])
+
+    all_healthy = all(
+        status == "healthy" for status in critical_checks
+    )
 
     overall_status = "healthy" if all_healthy else "degraded"
     status_code = 200 if all_healthy else 503
