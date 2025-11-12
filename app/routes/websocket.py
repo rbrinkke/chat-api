@@ -1,7 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
 from app.services.connection_manager import manager
 from app.services.chat_service import ChatService
-from app.middleware.auth import get_current_user
 from app.core.exceptions import UnauthorizedError, ForbiddenError
 from app.core.logging_config import get_logger
 from app.core.authorization import get_authorization_service, AuthContext

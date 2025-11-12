@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, status
-from app.middleware.auth import get_current_user
 from app.services.chat_service import ChatService
 from app.dependencies import get_chat_service, require_permission, AuthContext
 from app.schemas.group import GroupResponse, GroupListResponse
