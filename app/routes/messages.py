@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, status, Query, Request
 from app.services.chat_service import ChatService
-from app.dependencies import get_chat_service, require_permission, AuthContext
+from app.core.oauth_validator import require_scope, OAuthToken
 from app.schemas.message import (
     MessageCreate,
     MessageUpdate,
@@ -8,6 +8,11 @@ from app.schemas.message import (
     MessageListResponse
 )
 from app.core.logging_config import get_logger
+
+
+def get_chat_service() -> ChatService:
+    """Provide ChatService instance for dependency injection."""
+    return ChatService()
 from app.core.rate_limit import limiter
 
 router = APIRouter()
@@ -23,24 +28,30 @@ async def create_message(
     request: Request,
     group_id: str,
     message_data: MessageCreate,
-    auth_context: AuthContext = Depends(require_permission("chat:send_message")),
+    token: OAuthToken = Depends(require_scope("chat:write")),
     chat_service: ChatService = Depends(get_chat_service)
 ):
     """
     Create a new message in a group.
 
-    Requires permission: chat:send_message
+    Multi-Tenant Security:
+    - Validates group.org_id == token.org_id (via ChatService)
+    - Validates user is member of group (via GroupService)
+    - Message stored with org_id for tenant isolation
+
+    Requires OAuth scope: chat:write
     """
     logger.info(
         "api_create_message",
         group_id=group_id,
-        user_id=auth_context.user_id,
-        org_id=auth_context.org_id
+        org_id=token.org_id,
+        user_id=token.user_id
     )
 
     message = await chat_service.create_message(
         group_id=group_id,
-        sender_id=auth_context.user_id,
+        org_id=token.org_id,
+        sender_id=token.user_id,
         content=message_data.content
     )
 
@@ -55,26 +66,32 @@ async def get_messages(
     group_id: str,
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=100, description="Messages per page"),
-    auth_context: AuthContext = Depends(require_permission("chat:read")),
+    token: OAuthToken = Depends(require_scope("chat:read")),
     chat_service: ChatService = Depends(get_chat_service)
 ):
     """
     Get paginated message history for a group.
 
-    Requires permission: chat:read
+    Multi-Tenant Security:
+    - Validates group.org_id == token.org_id (via ChatService)
+    - Filters messages by org_id (MongoDB compound index)
+    - Only returns messages from user's organization
+
+    Requires OAuth scope: chat:read
     """
     logger.info(
         "api_get_messages",
         group_id=group_id,
-        user_id=auth_context.user_id,
-        org_id=auth_context.org_id,
+        org_id=token.org_id,
+        user_id=token.user_id,
         page=page,
         page_size=page_size
     )
 
     messages, total = await chat_service.get_messages(
         group_id=group_id,
-        user_id=auth_context.user_id,
+        org_id=token.org_id,
+        user_id=token.user_id,
         page=page,
         page_size=page_size
     )
@@ -99,25 +116,30 @@ async def update_message(
     request: Request,
     message_id: str,
     message_data: MessageUpdate,
-    auth_context: AuthContext = Depends(require_permission("chat:send_message")),
+    token: OAuthToken = Depends(require_scope("chat:write")),
     chat_service: ChatService = Depends(get_chat_service)
 ):
     """
     Update an existing message (only by sender).
 
-    Requires permission: chat:send_message
-    Note: Ownership check is still done in ChatService
+    Multi-Tenant Security:
+    - Validates message.org_id == token.org_id (via ChatService)
+    - Validates message.sender_id == token.user_id (ownership)
+    - Prevents cross-org message updates
+
+    Requires OAuth scope: chat:write
     """
     logger.info(
         "api_update_message",
         message_id=message_id,
-        user_id=auth_context.user_id,
-        org_id=auth_context.org_id
+        org_id=token.org_id,
+        user_id=token.user_id
     )
 
     message = await chat_service.update_message(
         message_id=message_id,
-        user_id=auth_context.user_id,
+        org_id=token.org_id,
+        user_id=token.user_id,
         new_content=message_data.content
     )
 
@@ -131,25 +153,30 @@ async def update_message(
 async def delete_message(
     request: Request,
     message_id: str,
-    auth_context: AuthContext = Depends(require_permission("chat:delete")),
+    token: OAuthToken = Depends(require_scope("chat:write")),
     chat_service: ChatService = Depends(get_chat_service)
 ):
     """
     Delete a message (soft delete, only by sender).
 
-    Requires permission: chat:delete
-    Note: Ownership check is still done in ChatService
+    Multi-Tenant Security:
+    - Validates message.org_id == token.org_id (via ChatService)
+    - Validates message.sender_id == token.user_id (ownership)
+    - Prevents cross-org message deletions
+
+    Requires OAuth scope: chat:write
     """
     logger.info(
         "api_delete_message",
         message_id=message_id,
-        user_id=auth_context.user_id,
-        org_id=auth_context.org_id
+        org_id=token.org_id,
+        user_id=token.user_id
     )
 
     await chat_service.delete_message(
         message_id=message_id,
-        user_id=auth_context.user_id
+        org_id=token.org_id,
+        user_id=token.user_id
     )
 
     return None

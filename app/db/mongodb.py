@@ -1,6 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
-from app.models.group import Group
 from app.models.message import Message
 from app.config import settings
 from app.core.logging_config import get_logger
@@ -11,6 +10,11 @@ logger = get_logger(__name__)
 async def init_db():
     """
     Initialize database connection and Beanie ODM.
+
+    Architecture Change:
+    - Group model REMOVED - Auth-API is Single Source of Truth for groups
+    - Only Message model remains in MongoDB
+    - Groups fetched via GroupService from Auth-API with Redis caching
 
     Connection pool configuration:
     - maxPoolSize=50: Maximum number of connections (prevents exhaustion)
@@ -35,9 +39,10 @@ async def init_db():
         logger.info(f"Successfully connected to MongoDB at {settings.MONGODB_URL}")
 
         # Initialize beanie with the database and document models
+        # Group model REMOVED - only Message model remains
         await init_beanie(
             database=client[settings.DATABASE_NAME],
-            document_models=[Group, Message]
+            document_models=[Message]
         )
 
         logger.info("Beanie ODM initialized successfully")

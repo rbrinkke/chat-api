@@ -23,7 +23,7 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
-import httpx
+import aiohttp  # LEGACY - Using aiohttp for compatibility (will be removed after OAuth2 migration)
 from app.config import settings
 from app.core.logging_config import get_logger
 from app.core.cache import cache

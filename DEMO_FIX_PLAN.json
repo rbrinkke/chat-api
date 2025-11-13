@@ -1,0 +1,98 @@
+{
+  "plan_name": "Sprint Demo 100% Working - Step by Step Execution Plan",
+  "goal": "Get the sprint demo script working 100% with users sending messages to each other",
+  "timestamp": "2025-11-13T06:24:00Z",
+  "steps": [
+    {
+      "step": 1,
+      "name": "Test Alice Login Manually",
+      "status": "in_progress",
+      "description": "Test if Alice can log in with email/password using corrected endpoint /api/auth/login",
+      "expected_result": "Either access_token OR 2FA code sent response",
+      "command": "curl -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d @alice_login.json",
+      "notes": "Auth-API might require 2FA code - check response"
+    },
+    {
+      "step": 2,
+      "name": "Handle 2FA if Needed",
+      "status": "pending",
+      "description": "If auth-api sends 2FA code to email, retrieve it and complete login",
+      "expected_result": "Access token with user_id in 'sub' claim",
+      "notes": "Auth-API may have 2FA flow: first request sends code, second request with code returns token"
+    },
+    {
+      "step": 3,
+      "name": "Test Bob Login Manually",
+      "status": "pending",
+      "description": "Test Bob's login with same process as Alice",
+      "expected_result": "Access token for Bob"
+    },
+    {
+      "step": 4,
+      "name": "Verify Group Membership",
+      "status": "pending",
+      "description": "Check if Alice and Bob are members of group 0fdf3a76-674b-4118-b6f1-e0a88982d0d5",
+      "command": "curl http://localhost:8000/api/auth/groups/0fdf3a76-674b-4118-b6f1-e0a88982d0d5/members -H 'Authorization: Bearer <service_token>'",
+      "expected_result": "Both Alice and Bob user IDs in members list"
+    },
+    {
+      "step": 5,
+      "name": "Test Alice Sends Message",
+      "status": "pending",
+      "description": "Alice sends first message to Chat-API using her access token",
+      "command": "curl -X POST http://localhost:8001/api/chat/groups/<group_id>/messages -H 'Authorization: Bearer <alice_token>' -d '{\"content\":\"Test\",\"sender_id\":\"<alice_user_id>\"}'",
+      "expected_result": "201 Created with message object containing id"
+    },
+    {
+      "step": 6,
+      "name": "Test Bob Sends Message",
+      "status": "pending",
+      "description": "Bob sends message to Chat-API using his access token",
+      "expected_result": "201 Created with message object"
+    },
+    {
+      "step": 7,
+      "name": "Test Message Retrieval",
+      "status": "pending",
+      "description": "Bob retrieves message history to see Alice's messages",
+      "command": "curl http://localhost:8001/api/chat/groups/<group_id>/messages -H 'Authorization: Bearer <bob_token>'",
+      "expected_result": "Array of messages including Alice's and Bob's messages"
+    },
+    {
+      "step": 8,
+      "name": "Test Message Update",
+      "status": "pending",
+      "description": "Alice edits her own message",
+      "command": "curl -X PUT http://localhost:8001/api/chat/messages/<message_id> -H 'Authorization: Bearer <alice_token>' -d '{\"content\":\"Edited\"}'",
+      "expected_result": "200 OK with updated message"
+    },
+    {
+      "step": 9,
+      "name": "Update Demo Script",
+      "status": "pending",
+      "description": "Update SPRINT_DEMO.sh with working login flow (including 2FA if needed)",
+      "expected_result": "Script reflects actual working flow"
+    },
+    {
+      "step": 10,
+      "name": "Run Complete Demo Script",
+      "status": "pending",
+      "description": "Execute ./SPRINT_DEMO.sh from start to finish",
+      "expected_result": "All 8 steps complete successfully, demo results saved"
+    }
+  ],
+  "current_blockers": [
+    "JSON decode error on login endpoint - need to test with proper JSON file to avoid shell escaping issues"
+  ],
+  "success_criteria": [
+    "Alice can log in and get access token",
+    "Bob can log in and get access token",
+    "Both users are members of test group",
+    "Alice can send messages to Chat-API",
+    "Bob can send messages to Chat-API",
+    "Users can retrieve message history",
+    "Users can edit their own messages",
+    "Complete demo script runs without errors",
+    "Sprint demo is ready for presentation"
+  ]
+}

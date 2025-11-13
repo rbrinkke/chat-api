@@ -1,11 +1,26 @@
+"""
+WebSocket endpoint for real-time chat with OAuth 2.0 and multi-tenant org_id validation.
+
+Architecture:
+- OAuth 2.0 HS256 token validation (shared secret with Auth-API)
+- GroupService validates group access and org_id
+- Multi-tenant isolation via org_id validation
+- Real-time message broadcasting via ConnectionManager
+
+Security:
+- JWT token validation via query parameter
+- Validates user is member of group (GroupService)
+- Validates group.org_id == token.org_id (multi-tenant security)
+"""
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
 from app.services.connection_manager import manager
-from app.services.chat_service import ChatService
-from app.core.exceptions import UnauthorizedError, ForbiddenError
+from app.services.group_service import get_group_service
+from app.core.exceptions import NotFoundError, ForbiddenError
 from app.core.logging_config import get_logger
-from app.core.authorization import get_authorization_service, AuthContext
+from app.core.oauth_validator import validate_oauth_token, OAuthToken, JWT_SECRET_KEY, JWT_ALGORITHM
 from jose import JWTError, jwt
-from app.config import settings
+from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -18,106 +33,196 @@ except ImportError:
     METRICS_AVAILABLE = False
 
 
-async def verify_websocket_token(token: str) -> AuthContext:
+async def verify_websocket_oauth_token(token: str) -> OAuthToken:
     """
-    Verify JWT token for WebSocket connection and extract auth context.
+    Verify OAuth 2.0 JWT token for WebSocket connection.
+
+    Validates:
+    - JWT signature (HS256 shared secret)
+    - Token expiration
+    - Token type (must be "access")
+    - Extracts user_id, org_id, scopes
+
+    Args:
+        token: JWT token from query parameter
 
     Returns:
-        AuthContext with user_id and org_id
+        OAuthToken with user_id, org_id, scopes
 
     Raises:
-        UnauthorizedError: If token is invalid
+        JWTError: If token is invalid, expired, or wrong type
     """
     try:
+        # Decode and validate JWT token (same as oauth_validator.py)
         payload = jwt.decode(
             token,
-            settings.JWT_SECRET,
-            algorithms=[settings.JWT_ALGORITHM]
+            JWT_SECRET_KEY,
+            algorithms=[JWT_ALGORITHM],
+            options={
+                "verify_exp": True,  # Verify expiration
+                "verify_iat": True,  # Verify issued_at
+                "verify_signature": True,  # Verify signature
+                "verify_aud": False  # Skip audience validation
+            }
         )
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise UnauthorizedError("Invalid token: missing user_id")
 
-        # Extract org_id (with backward compatibility)
-        org_id: str = payload.get("org_id", "default-org")
+        # Validate token type (must be "access" not "refresh")
+        if payload.get("type") != "access":
+            logger.warning(
+                "websocket_invalid_token_type",
+                token_type=payload.get("type"),
+                expected="access"
+            )
+            raise JWTError("Invalid token type")
 
-        return AuthContext(
-            user_id=user_id,
-            org_id=org_id,
-            username=payload.get("username"),
-            email=payload.get("email")
+        # Create OAuthToken object
+        oauth_token = OAuthToken.from_jwt_payload(payload)
+
+        logger.debug(
+            "websocket_token_validated",
+            user_id=oauth_token.user_id,
+            org_id=oauth_token.org_id,
+            scopes=oauth_token.scopes
         )
-    except JWTError:
-        raise UnauthorizedError("Invalid token")
+
+        return oauth_token
+
+    except jwt.ExpiredSignatureError:
+        logger.warning("websocket_token_expired")
+        raise
+    except JWTError as e:
+        logger.warning("websocket_token_invalid", error=str(e))
+        raise
 
 
 @router.websocket("/ws/{group_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
     group_id: str,
-    token: str = Query(..., description="JWT authentication token")
+    token: str = Query(..., description="OAuth 2.0 JWT access token")
 ):
     """
     WebSocket endpoint for real-time chat in a group.
 
-    Authentication: Pass JWT token as query parameter
-    Example: ws://localhost:8001/api/chat/ws/group-123?token=YOUR_JWT_TOKEN
+    Authentication: OAuth 2.0 JWT token via query parameter
+    Example: ws://localhost:8001/api/chat/ws/group-uuid?token=YOUR_ACCESS_TOKEN
 
-    Authorization: Requires chat:read permission
+    Multi-Tenant Security:
+    1. Validates JWT token (OAuth 2.0 HS256)
+    2. Validates token has chat:read scope
+    3. Validates group exists in Auth-API (via GroupService)
+    4. Validates group.org_id == token.org_id (multi-tenant isolation)
+    5. Validates user is member of group
+
+    Message Flow:
+    - Client → Server: ping, typing indicators
+    - Server → Client: pong, user_joined, user_left, new_message, message_updated, message_deleted
 
     Args:
         websocket: WebSocket connection
-        group_id: ID of the group to connect to
-        token: JWT token for authentication
+        group_id: Group UUID from Auth-API
+        token: OAuth 2.0 JWT access token (from Auth-API)
+
+    Raises:
+        WebSocketDisconnect: On normal disconnection
+        JWTError: On invalid/expired token
+        ForbiddenError: On insufficient permissions or org_id mismatch
     """
-    # Initialize user_id for error handling
+    # Initialize for error handling
     user_id = None
+    org_id = None
 
     try:
-        # Step 1: Authenticate user and extract context
-        auth_context = await verify_websocket_token(token)
-        user_id = auth_context.user_id
-        logger.info(
-            "websocket_authentication_successful",
-            user_id=auth_context.user_id,
-            org_id=auth_context.org_id,
-            group_id=group_id
-        )
-
-        # Step 2: Check RBAC permission
+        # Step 1: Validate OAuth 2.0 token
         try:
-            auth_service = await get_authorization_service()
-            await auth_service.check_permission(
-                org_id=auth_context.org_id,
-                user_id=auth_context.user_id,
-                permission="chat:read"  # WebSocket requires read permission
-            )
-        except ForbiddenError:
-            logger.warning(
-                "websocket_permission_denied",
+            oauth_token = await verify_websocket_oauth_token(token)
+            user_id = oauth_token.user_id
+            org_id = oauth_token.org_id
+
+            logger.info(
+                "websocket_token_validated",
+                user_id=user_id,
+                org_id=org_id,
                 group_id=group_id,
-                user_id=auth_context.user_id,
-                org_id=auth_context.org_id
+                scopes=oauth_token.scopes
+            )
+        except JWTError as e:
+            logger.warning(
+                "websocket_authentication_failed",
+                group_id=group_id,
+                error=str(e)
             )
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
+
+        # Step 2: Validate OAuth scope (chat:read required)
+        if not oauth_token.has_scope("chat:read"):
+            logger.warning(
+                "websocket_insufficient_scope",
+                user_id=user_id,
+                org_id=org_id,
+                group_id=group_id,
+                required_scope="chat:read",
+                available_scopes=oauth_token.scopes
+            )
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        # Step 3: Verify user has access to group AND org_id matches
+        # GroupService handles:
+        # - Fetch group from Auth-API (with caching)
+        # - Validate group.org_id == org_id
+        # - Validate user in group.member_ids
+        try:
+            group_service = get_group_service()
+            group = await group_service.get_group_details(
+                group_id=group_id,
+                expected_org_id=org_id
+            )
+
+            if not group:
+                logger.warning(
+                    "websocket_group_not_found_or_org_mismatch",
+                    group_id=group_id,
+                    org_id=org_id,
+                    user_id=user_id
+                )
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+            # Verify user is member of the group
+            if user_id not in group.member_ids:
+                logger.warning(
+                    "websocket_user_not_member",
+                    group_id=group_id,
+                    org_id=org_id,
+                    user_id=user_id
+                )
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
         except Exception as e:
             logger.error(
-                "websocket_permission_check_failed",
+                "websocket_group_validation_failed",
                 group_id=group_id,
-                user_id=auth_context.user_id,
+                org_id=org_id,
+                user_id=user_id,
                 error=str(e)
             )
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
             return
 
-        # Step 3: Verify user has access to the group (existing logic)
-        chat_service = ChatService()
-        await chat_service.get_group(group_id, auth_context.user_id)
-
-        # Accept connection
+        # All validations passed - accept connection
         await manager.connect(websocket, group_id)
         connection_count = manager.get_group_connection_count(group_id)
+
+        logger.info(
+            "websocket_connected",
+            group_id=group_id,
+            org_id=org_id,
+            user_id=user_id,
+            connection_count=connection_count
+        )
 
         # Record connection event for dashboard
         if METRICS_AVAILABLE:
@@ -125,7 +230,7 @@ async def websocket_endpoint(
                 metrics_collector.record_ws_event(
                     event_type="connected",
                     group_id=group_id,
-                    user_id=auth_context.user_id,
+                    user_id=user_id,
                     connection_count=connection_count
                 )
             except Exception as e:
@@ -136,7 +241,9 @@ async def websocket_endpoint(
             {
                 "type": "connected",
                 "message": f"Connected to group {group_id}",
-                "user_id": auth_context.user_id
+                "group_name": group.name,
+                "user_id": user_id,
+                "org_id": org_id
             },
             websocket
         )
@@ -146,7 +253,7 @@ async def websocket_endpoint(
             group_id,
             {
                 "type": "user_joined",
-                "user_id": auth_context.user_id,
+                "user_id": user_id,
                 "connection_count": connection_count
             }
         )
@@ -168,15 +275,16 @@ async def websocket_endpoint(
                     group_id,
                     {
                         "type": "user_typing",
-                        "user_id": auth_context.user_id
+                        "user_id": user_id
                     }
                 )
             else:
                 # Echo back for now (messages are created via REST API)
-                logger.info(
+                logger.debug(
                     "websocket_message_received",
                     group_id=group_id,
-                    user_id=auth_context.user_id,
+                    org_id=org_id,
+                    user_id=user_id,
                     message_type=data.get("type", "unknown")
                 )
 
@@ -186,7 +294,8 @@ async def websocket_endpoint(
         logger.info(
             "websocket_disconnected",
             group_id=group_id,
-            user_id=user_id if 'user_id' in locals() else "unknown",
+            org_id=org_id if org_id else "unknown",
+            user_id=user_id if user_id else "unknown",
             connection_count=connection_count
         )
 
@@ -196,7 +305,7 @@ async def websocket_endpoint(
                 metrics_collector.record_ws_event(
                     event_type="disconnected",
                     group_id=group_id,
-                    user_id=user_id if 'user_id' in locals() else "unknown",
+                    user_id=user_id if user_id else "unknown",
                     connection_count=connection_count
                 )
             except Exception as e:
@@ -207,7 +316,7 @@ async def websocket_endpoint(
             group_id,
             {
                 "type": "user_left",
-                "user_id": user_id if 'user_id' in locals() else "unknown",
+                "user_id": user_id if user_id else "unknown",
                 "connection_count": connection_count
             }
         )
@@ -218,10 +327,11 @@ async def websocket_endpoint(
             error_type=type(e).__name__,
             error=str(e),
             group_id=group_id,
-            user_id=user_id if 'user_id' in locals() else "unknown",
+            org_id=org_id if org_id else "unknown",
+            user_id=user_id if user_id else "unknown",
             exc_info=True  # Include stack trace for debugging
         )
         try:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
         except:
             pass

@@ -8,10 +8,14 @@ from app.config import settings
 from app.core.logging_config import setup_logging, get_logger
 from app.core.rate_limit import limiter
 from app.core.cache import cache
-from app.core.authorization import get_authorization_service, close_authorization_service
+# OAuth 2.0 HS256 - No legacy RBAC needed (fully migrated to OAuth2)
+# JWKS not needed for HS256 (symmetric signing with shared secret)
+# from app.core.jwks_manager import get_jwks_manager, close_jwks_manager  # OAuth 2.0
 from app.db.mongodb import init_db
 from app.middleware.access_log import AccessLogMiddleware, RequestContextMiddleware
-from app.routes import groups, messages, websocket, dashboard, test_ui
+# OAuth2Middleware uses RS256/JWKS - not needed for HS256
+# from app.middleware.oauth2 import OAuth2Middleware  # OAuth 2.0 Resource Server
+from app.routes import messages, websocket, dashboard, test_ui
 
 # Setup structured logging BEFORE any other imports that might log
 setup_logging()
@@ -45,21 +49,53 @@ async def lifespan(app: FastAPI):
     # Initialize cache (optional, graceful degradation if Redis unavailable)
     await cache.initialize()
 
-    # Initialize authorization service
+    # ========== OAuth 2.0 Resource Server (HS256 - Shared Secret) ==========
+    # Using HS256 symmetric signing with shared JWT_SECRET_KEY
+    # NO JWKS endpoint needed - Auth API and Chat API share the same secret
+    logger.info(
+        "oauth2_hs256_mode",
+        algorithm=settings.JWT_ALGORITHM,
+        message="OAuth 2.0 using HS256 symmetric signing (shared secret with Auth API)"
+    )
+
+    # ========== Service-to-Service OAuth (Client Credentials) ==========
+    # Initialize token manager for Auth-API group data access
     try:
-        auth_service = await get_authorization_service()
+        from app.core.service_auth import init_service_token_manager
+
+        token_manager = init_service_token_manager(
+            client_id=settings.SERVICE_CLIENT_ID,
+            client_secret=settings.SERVICE_CLIENT_SECRET,
+            token_url=settings.SERVICE_TOKEN_URL,
+            scope=settings.SERVICE_SCOPE
+        )
         logger.info(
-            "authorization_service_initialized",
-            auth_api_url=settings.AUTH_API_URL,
-            cache_enabled=settings.AUTH_CACHE_ENABLED,
-            fail_open=settings.AUTH_FAIL_OPEN
+            "service_token_manager_initialized",
+            client_id=settings.SERVICE_CLIENT_ID,
+            token_url=settings.SERVICE_TOKEN_URL,
+            scope=settings.SERVICE_SCOPE
         )
+
+        # ✅ CRITICAL: Start token manager in async context
+        # This creates aiohttp.ClientSession in the correct event loop
+        await token_manager.start()
+
+        # ✅ CRITICAL: Start group service in async context
+        # This creates aiohttp.ClientSession in the correct event loop
+        from app.services.group_service import get_group_service
+        group_service = get_group_service()
+        await group_service.start()
+
     except Exception as e:
-        logger.warning(
-            "authorization_service_initialization_warning",
+        logger.error(
+            "service_token_manager_initialization_failed",
             error=str(e),
-            message="Authorization service initialization had issues but continuing..."
+            exc_info=True
         )
+        raise
+
+    # ✅ OAuth 2.0 migration complete - No legacy RBAC needed!
+    # All authorization now handled via OAuth2 Client Credentials + JWT validation
 
     yield
 
@@ -70,8 +106,17 @@ async def lifespan(app: FastAPI):
     from app.services.connection_manager import manager
     await manager.shutdown_all()
 
-    # Close authorization service
-    await close_authorization_service()
+    # OAuth 2.0 HS256 doesn't require cleanup (no JWKS manager)
+
+    # Close service token manager HTTP client
+    from app.core.service_auth import get_service_token_manager
+    token_manager = get_service_token_manager()
+    await token_manager.close()
+
+    # Close group service HTTP client
+    from app.services.group_service import get_group_service
+    group_service = get_group_service()
+    await group_service.close()
 
     # Close cache connection
     await cache.close()
@@ -107,10 +152,18 @@ try:
 except ImportError:
     logger.warning("prometheus_metrics_disabled", reason="prometheus-fastapi-instrumentator not installed")
 
-# Middleware order matters! They execute in reverse order of registration.
+# ========== Middleware Stack ==========
+# Middleware order matters! They execute in REVERSE order of registration.
 # Last added = first to execute
+#
+# Execution Order:
+# 1. RequestContextMiddleware (adds correlation ID)
+# 2. OAuth2Middleware (validates JWT, adds auth context)
+# 3. AccessLogMiddleware (logs request/response)
+# 4. CORSMiddleware (handles CORS headers)
+# 5. Route Handler (your business logic)
 
-# Add CORS middleware (executes first)
+# Add CORS middleware (executes last)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -119,14 +172,17 @@ app.add_middleware(
     allow_headers=settings.CORS_ALLOW_HEADERS,
 )
 
-# Add access logging middleware (executes second - logs every request)
+# Add access logging middleware (executes third)
 app.add_middleware(AccessLogMiddleware)
 
-# Add request context middleware (executes last - enriches request with user info)
+# OAuth2 HS256 validation happens in route handlers via oauth_validator.py
+# No middleware needed - use Depends(validate_oauth_token) in routes
+
+# Add request context middleware (executes first - enriches request)
 app.add_middleware(RequestContextMiddleware)
 
 # Include routers
-app.include_router(groups.router, prefix=settings.API_PREFIX, tags=["groups"])
+# groups router removed - Auth-API is now Single Source of Truth for groups
 app.include_router(messages.router, prefix=settings.API_PREFIX, tags=["messages"])
 app.include_router(websocket.router, prefix=settings.API_PREFIX, tags=["websocket"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
@@ -148,19 +204,20 @@ async def health_check():
     Returns 200 if all checks pass, 503 if any critical component fails.
     """
     from datetime import datetime
-    from app.models.group import Group
+    from app.models.message import Message
     from fastapi.responses import JSONResponse
 
     checks = {
         "application": "healthy",
         "mongodb": "unknown",
         "redis": "unknown" if settings.REDIS_URL else "not_configured",
-        "auth_api": "unknown"
+        "oauth_hs256": "unknown",  # JWT validation (HS256 shared secret)
+        "oauth_service_auth": "unknown"  # Service-to-service OAuth2 Client Credentials
     }
 
-    # Check MongoDB
+    # Check MongoDB (using Message model - Group model removed)
     try:
-        await Group.find().limit(1).to_list()
+        await Message.find().limit(1).to_list()
         checks["mongodb"] = "healthy"
     except Exception as e:
         logger.error("health_check_mongodb_failed", error=str(e))
@@ -175,36 +232,45 @@ async def health_check():
             logger.error("health_check_redis_failed", error=str(e))
             checks["redis"] = f"unhealthy: {type(e).__name__}"
 
-    # Check Auth API
+    # Check OAuth HS256 Configuration (JWT_SECRET_KEY validation)
     try:
-        auth_service = await get_authorization_service()
+        from app.core.oauth_validator import JWT_SECRET_KEY, JWT_ALGORITHM
 
-        # Simple connectivity test: check a dummy permission
-        # This will test Auth API + Circuit Breaker
-        test_result = await auth_service.auth_api_client.check_permission(
-            org_id="health-check",
-            user_id="health-check",
-            permission="health:check"
-        )
-
-        if test_result is None:
-            # Circuit breaker might be open or Auth API down
-            checks["auth_api"] = "degraded: circuit_breaker_open_or_unavailable"
+        if JWT_SECRET_KEY and len(JWT_SECRET_KEY) >= 32:
+            checks["oauth_hs256"] = f"healthy (algorithm: {JWT_ALGORITHM})"
         else:
-            checks["auth_api"] = "healthy"
+            checks["oauth_hs256"] = "unhealthy: JWT_SECRET_KEY too short or missing"
 
     except Exception as e:
-        logger.error("health_check_auth_api_failed", error=str(e))
-        checks["auth_api"] = f"unhealthy: {type(e).__name__}"
+        logger.error("health_check_oauth_hs256_failed", error=str(e))
+        checks["oauth_hs256"] = f"unhealthy: {type(e).__name__}"
+
+    # OAuth 2.0 Service-to-Service Auth - Check token manager
+    try:
+        from app.core.service_auth import get_service_token_manager
+        token_manager = get_service_token_manager()
+
+        # Quick check: try to get a token (will use cached if valid)
+        token = await token_manager.get_token()
+
+        if token and len(token) > 0:
+            checks["oauth_service_auth"] = "healthy (OAuth2 Client Credentials)"
+        else:
+            checks["oauth_service_auth"] = "unhealthy: no token available"
+
+    except Exception as e:
+        logger.error("health_check_service_auth_failed", error=str(e))
+        checks["oauth_service_auth"] = f"unhealthy: {type(e).__name__}"
 
     # Determine overall status
     critical_checks = [checks["mongodb"]]  # MongoDB is critical
-    # Auth API is NOT critical if FAIL_OPEN is enabled
-    if not settings.AUTH_FAIL_OPEN:
-        critical_checks.append(checks["auth_api"])
+
+    # HS256 OAuth doesn't need JWKS - only shared secret required
+    # Service-to-service OAuth verified via oauth_service_auth check
 
     all_healthy = all(
-        status == "healthy" for status in critical_checks
+        status.startswith("healthy") or status.startswith("degraded")
+        for status in critical_checks
     )
 
     overall_status = "healthy" if all_healthy else "degraded"

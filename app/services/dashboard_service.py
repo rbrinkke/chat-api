@@ -16,7 +16,7 @@ import psutil
 import time
 
 from app.core.logging_config import get_logger
-from app.models.group import Group
+# Group model removed - groups now fetched from Auth-API via GroupService
 from app.models.message import Message
 from app.services.connection_manager import ConnectionManager
 from beanie import PydanticObjectId
@@ -196,10 +196,10 @@ class DashboardService:
                 "error": "System resource metrics unavailable"
             }
 
-        # Check MongoDB health
+        # Check MongoDB health (using Message model - Group model removed)
         try:
             # Simple query to verify MongoDB is responsive
-            await Group.find_one()
+            await Message.find_one()
             mongodb_status = "connected"
             mongodb_healthy = True
         except Exception as e:
@@ -217,34 +217,41 @@ class DashboardService:
         }
 
     async def _get_database_metrics(self) -> Dict[str, Any]:
-        """Get database statistics and growth metrics."""
+        """
+        Get database statistics and growth metrics.
+
+        NOTE: Group stats removed - groups now managed by Auth-API.
+        Only message stats available from MongoDB.
+        """
         try:
-            # Total counts
-            total_groups = await Group.count()
+            # Total counts (messages only - groups in Auth-API)
             total_messages = await Message.count()
             active_messages = await Message.find(Message.is_deleted == False).count()
             deleted_messages = total_messages - active_messages
 
             # Recent activity (last 24 hours)
             yesterday = datetime.utcnow() - timedelta(hours=24)
-            recent_groups = await Group.find(Group.created_at >= yesterday).count()
             recent_messages = await Message.find(Message.created_at >= yesterday).count()
 
-            # Most active groups
+            # Most active groups (by message count)
             top_groups = await self._get_top_active_groups(limit=10)
+
+            # Count unique groups from messages
+            unique_groups = await Message.distinct("group_id")
+            total_groups = len(unique_groups)
 
             # Average messages per group
             avg_messages_per_group = round(total_messages / total_groups, 2) if total_groups > 0 else 0
 
             return {
-                "total_groups": total_groups,
+                "total_groups": f"{total_groups} (from messages)",  # Groups counted from messages, not Auth-API
                 "total_messages": total_messages,
                 "active_messages": active_messages,
                 "deleted_messages": deleted_messages,
                 "deletion_rate_percent": round((deleted_messages / total_messages * 100), 2) if total_messages > 0 else 0,
                 "avg_messages_per_group": avg_messages_per_group,
                 "last_24h": {
-                    "new_groups": recent_groups,
+                    "new_groups": "N/A (Auth-API)",  # Can't track new groups without Auth-API integration
                     "new_messages": recent_messages,
                 },
                 "top_active_groups": top_groups,
@@ -254,13 +261,18 @@ class DashboardService:
             return {"error": str(e)}
 
     async def _get_top_active_groups(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get most active groups by message count."""
+        """
+        Get most active groups by message count.
+
+        Uses denormalized group_name from Message model (no Auth-API call needed).
+        """
         try:
             # Aggregate messages by group
             pipeline = [
                 {"$match": {"is_deleted": False}},
                 {"$group": {
                     "_id": "$group_id",
+                    "group_name": {"$first": "$group_name"},  # Get group_name from denormalized field
                     "message_count": {"$sum": 1},
                     "last_message": {"$max": "$created_at"}
                 }},
@@ -270,30 +282,15 @@ class DashboardService:
 
             results = await Message.aggregate(pipeline).to_list()
 
-            # Enrich with group names
+            # Format results
             enriched = []
             for result in results:
-                group_id = result["_id"]
-                try:
-                    # Convert string to ObjectId if needed
-                    if isinstance(group_id, str):
-                        group_id = PydanticObjectId(group_id)
-
-                    group = await Group.get(group_id)
-                    enriched.append({
-                        "group_id": str(result["_id"]),
-                        "group_name": group.name if group else "Unknown",
-                        "message_count": result["message_count"],
-                        "last_message": result["last_message"].isoformat() if result.get("last_message") else None,
-                    })
-                except Exception as e:
-                    self.logger.warning("group_lookup_failed", group_id=str(group_id), error=str(e))
-                    enriched.append({
-                        "group_id": str(result["_id"]),
-                        "group_name": "Unknown",
-                        "message_count": result["message_count"],
-                        "last_message": result["last_message"].isoformat() if result.get("last_message") else None,
-                    })
+                enriched.append({
+                    "group_id": str(result["_id"]),
+                    "group_name": result.get("group_name", "Unknown"),  # From denormalized field
+                    "message_count": result["message_count"],
+                    "last_message": result["last_message"].isoformat() if result.get("last_message") else None,
+                })
 
             return enriched
         except Exception as e:
@@ -302,7 +299,7 @@ class DashboardService:
 
     def _get_websocket_metrics(self) -> Dict[str, Any]:
         """Get real-time WebSocket connection statistics."""
-        connections = self.connection_manager.connections
+        connections = self.connection_manager.active_connections
 
         total_connections = sum(len(group_conns) for group_conns in connections.values())
         active_groups = len(connections)

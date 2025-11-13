@@ -33,9 +33,18 @@ class MessageUpdate(BaseModel):
 
 
 class MessageResponse(BaseModel):
-    """Schema for message response."""
+    """
+    Schema for message response.
+
+    Multi-Tenant Architecture:
+    - org_id: Organization UUID for client-side filtering
+    - group_id: Group UUID from Auth-API
+    - group_name: Denormalized for performance (no Auth-API call needed)
+    """
     id: str
-    group_id: str
+    org_id: str  # Organization UUID (multi-tenant isolation)
+    group_id: str  # Group UUID from Auth-API
+    group_name: str  # Denormalized group name
     sender_id: str
     content: str
     created_at: datetime
@@ -56,7 +65,9 @@ class MessageResponse(BaseModel):
         from app.models.message import Message
         return cls(
             id=str(message.id),
+            org_id=message.org_id,
             group_id=message.group_id,
+            group_name=message.group_name,
             sender_id=message.sender_id,
             content=message.content,
             created_at=message.created_at,

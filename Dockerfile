@@ -62,10 +62,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 # Production command with proper logging
 # --access-log is disabled because we use custom AccessLogMiddleware
+# --loop asyncio disables uvloop (which can have httpx compatibility issues)
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8001", \
      "--no-access-log", \
+     "--loop", "asyncio", \
      "--log-config", "logging.yaml"]
 
 # Alternative: Gunicorn for production (with multiple workers)
