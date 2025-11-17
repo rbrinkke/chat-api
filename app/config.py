@@ -76,5 +76,10 @@ class Settings(BaseSettings):
     CORS_ALLOW_METHODS: List[str] = ["*"]
     CORS_ALLOW_HEADERS: List[str] = ["*"]
 
+    # API Documentation (Swagger UI / OpenAPI)
+    ENABLE_DOCS: bool = True
+    PROJECT_NAME: str = "Activity Platform - Real-time Chat API"
+    API_VERSION: str = "1.0.0"
+
 
 settings = Settings()

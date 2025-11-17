@@ -57,3 +57,6 @@ htmlcov/
 # Project specific
 code
 readme
+
+# Claude Code documentation (not part of repository)
+claudedocs_shared/

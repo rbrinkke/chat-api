@@ -122,10 +122,46 @@ async def lifespan(app: FastAPI):
     await cache.close()
 
 
-# Create FastAPI app
+# Create FastAPI app with environment-conditional Swagger UI (best practice for production security)
 app = FastAPI(
-    title=settings.APP_NAME,
-    version=settings.APP_VERSION,
+    title=settings.PROJECT_NAME,
+    version=settings.API_VERSION,
+    description="""
+**Real-time chat API built with FastAPI, MongoDB, and WebSocket support.**
+
+Features JWT authentication (shared secret with auth-api), group-based authorization, and production-grade structured logging with correlation IDs.
+
+## Key Features
+- **WebSocket Real-time Communication**: Live message broadcasting to all group members
+- **Group-based Authorization**: Fine-grained access control per chat group
+- **Soft Deletes**: Messages never permanently deleted (audit trail preserved)
+- **OAuth 2.0 Integration**: HS256 JWT validation with shared secret from auth-api
+- **Structured Logging**: JSON logging with correlation IDs for request tracing
+- **Circuit Breaker**: Resilient authorization service communication
+
+## Architecture
+- **Database**: MongoDB with Beanie ODM for document modeling
+- **Cache**: Optional Redis for authorization caching (5min TTL)
+- **WebSocket**: In-memory connection pooling with automatic cleanup
+- **Authentication**: JWT tokens issued by auth-api (shared JWT_SECRET_KEY)
+- **Observability**: Prometheus metrics, structured logging, real-time dashboard
+
+## Security
+- JWT Bearer authentication required for all endpoints
+- Group authorization checks on every message operation
+- Circuit breaker with fail-closed security (denies access on auth service failure)
+- Correlation ID tracking for security auditing
+    """,
+    docs_url="/docs" if settings.ENABLE_DOCS else None,
+    redoc_url="/redoc" if settings.ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if settings.ENABLE_DOCS else None,
+    contact={
+        "name": "Activity Platform Team",
+        "email": "dev@activityapp.com"
+    },
+    license_info={
+        "name": "Proprietary"
+    },
     lifespan=lifespan
 )
 
@@ -187,6 +223,39 @@ app.include_router(messages.router, prefix=settings.API_PREFIX, tags=["messages"
 app.include_router(websocket.router, prefix=settings.API_PREFIX, tags=["websocket"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
 app.include_router(test_ui.router, tags=["test-ui"])
+
+
+# Configure OpenAPI security scheme for JWT Bearer authentication
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    from fastapi.openapi.utils import get_openapi
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    if settings.ENABLE_DOCS:
+        # Add JWT Bearer security scheme
+        openapi_schema["components"] = openapi_schema.get("components", {})
+        openapi_schema["components"]["securitySchemes"] = {
+            "BearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": "JWT access token from auth-api. Format: `Bearer <token>`. Token must be obtained from auth-api /auth/login endpoint."
+            }
+        }
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 
 # Health check endpoint
