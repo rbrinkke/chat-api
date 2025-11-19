@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from datetime import datetime
 from typing import List
 import bleach
@@ -51,8 +51,8 @@ class MessageResponse(BaseModel):
     updated_at: datetime
     is_deleted: bool = False
 
-    class Config:
-        from_attributes = True
+    # Pydantic V2 Elegance: Replaces class Config: from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
     @classmethod
     def from_model(cls, message: "Message") -> "MessageResponse":

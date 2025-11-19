@@ -89,6 +89,64 @@ class OAuthToken(BaseModel):
 # Token Validation
 # ============================================================================
 
+def decode_token_string(token: str) -> OAuthToken:
+    """
+    Decodes and validates a raw JWT token string.
+    This is used for non-HTTP-header authentication (e.g., WebSocket query param).
+
+    Args:
+        token: Raw JWT string.
+
+    Returns:
+        OAuthToken: Parsed and validated token object.
+
+    Raises:
+        jwt.InvalidTokenError: If token is invalid, expired, or wrong type.
+        jwt.ExpiredSignatureError: If token is expired.
+    """
+    try:
+        # Decode and validate JWT token
+        payload = jwt.decode(
+            token,
+            JWT_SECRET_KEY,
+            algorithms=[JWT_ALGORITHM],
+            options={
+                "verify_exp": True,  # Verify expiration
+                "verify_iat": True,  # Verify issued_at
+                "verify_signature": True,  # Verify signature
+                "verify_aud": False  # Skip audience validation (accept any audience)
+            }
+        )
+    except jwt.ExpiredSignatureError:
+        logger.warning("oauth_token_expired")
+        raise
+    except jwt.InvalidTokenError:
+        logger.warning("oauth_token_invalid")
+        raise
+
+    # Validate token type (must be "access" not "refresh")
+    if payload.get("type") != "access":
+        logger.warning(
+            "oauth_invalid_token_type",
+            token_type=payload.get("type"),
+            expected="access"
+        )
+        raise jwt.InvalidTokenError("Invalid token type")
+
+    # Create OAuthToken object
+    oauth_token = OAuthToken.from_jwt_payload(payload)
+
+    logger.debug(
+        "oauth_token_decoded_raw",
+        user_id=oauth_token.user_id,
+        client_id=oauth_token.client_id,
+        scopes=oauth_token.scopes,
+        source="raw_string_decode"
+    )
+
+    return oauth_token
+
+
 def validate_oauth_token(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> OAuthToken:
