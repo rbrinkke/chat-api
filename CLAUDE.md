@@ -6,6 +6,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Real-time chat API built with **FastAPI**, **MongoDB/Beanie ODM**, and **WebSocket** support. Features JWT authentication (shared secret with auth-api), group-based authorization, and production-grade structured logging with correlation IDs.
 
+## Quick User Creation (Testing)
+
+A utility script is available to quickly create and activate test users:
+
+```bash
+# Create user with random email/password and get JWT token
+source ./utils/create_user.sh
+
+# Script exports:
+# - $USER_EMAIL      (generated email)
+# - $USER_PASSWORD   (generated password)
+# - $USER_ID         (UUID from database)
+# - $JWT_TOKEN       (access token)
+# - $REFRESH_TOKEN   (refresh token)
+
+# Use in API requests:
+curl -H "Authorization: Bearer $JWT_TOKEN" http://localhost:8001/api/chat/groups
+```
+
+**What it does:**
+1. Generates random email and password
+2. Registers user via Auth API
+3. Activates user in database (sets is_verified=true)
+4. Logs in and retrieves JWT tokens
+5. Exports all credentials as environment variables
+
+See `utils/create_user.sh` for implementation.
+
 ## Common Commands
 
 ### Development
