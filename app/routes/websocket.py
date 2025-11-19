@@ -18,8 +18,8 @@ from app.services.connection_manager import manager
 from app.services.group_service import get_group_service
 from app.core.exceptions import NotFoundError, ForbiddenError
 from app.core.logging_config import get_logger
-from app.core.oauth_validator import validate_oauth_token, OAuthToken, JWT_SECRET_KEY, JWT_ALGORITHM
-from jose import JWTError, jwt
+from app.core.oauth_validator import decode_token_string, OAuthToken
+from jose import JWTError
 from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
@@ -36,12 +36,7 @@ except ImportError:
 async def verify_websocket_oauth_token(token: str) -> OAuthToken:
     """
     Verify OAuth 2.0 JWT token for WebSocket connection.
-
-    Validates:
-    - JWT signature (HS256 shared secret)
-    - Token expiration
-    - Token type (must be "access")
-    - Extracts user_id, org_id, scopes
+    Uses centralized decoding/validation logic from app.core.oauth_validator.
 
     Args:
         token: JWT token from query parameter
@@ -52,47 +47,8 @@ async def verify_websocket_oauth_token(token: str) -> OAuthToken:
     Raises:
         JWTError: If token is invalid, expired, or wrong type
     """
-    try:
-        # Decode and validate JWT token (same as oauth_validator.py)
-        payload = jwt.decode(
-            token,
-            JWT_SECRET_KEY,
-            algorithms=[JWT_ALGORITHM],
-            options={
-                "verify_exp": True,  # Verify expiration
-                "verify_iat": True,  # Verify issued_at
-                "verify_signature": True,  # Verify signature
-                "verify_aud": False  # Skip audience validation
-            }
-        )
-
-        # Validate token type (must be "access" not "refresh")
-        if payload.get("type") != "access":
-            logger.warning(
-                "websocket_invalid_token_type",
-                token_type=payload.get("type"),
-                expected="access"
-            )
-            raise JWTError("Invalid token type")
-
-        # Create OAuthToken object
-        oauth_token = OAuthToken.from_jwt_payload(payload)
-
-        logger.debug(
-            "websocket_token_validated",
-            user_id=oauth_token.user_id,
-            org_id=oauth_token.org_id,
-            scopes=oauth_token.scopes
-        )
-
-        return oauth_token
-
-    except jwt.ExpiredSignatureError:
-        logger.warning("websocket_token_expired")
-        raise
-    except JWTError as e:
-        logger.warning("websocket_token_invalid", error=str(e))
-        raise
+    # Use the centralized function to follow DRY principle
+    return decode_token_string(token)
 
 
 @router.websocket("/ws/{group_id}")

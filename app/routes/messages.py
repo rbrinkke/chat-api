@@ -8,11 +8,6 @@ from app.schemas.message import (
     MessageListResponse
 )
 from app.core.logging_config import get_logger
-
-
-def get_chat_service() -> ChatService:
-    """Provide ChatService instance for dependency injection."""
-    return ChatService()
 from app.core.rate_limit import limiter
 
 router = APIRouter()
@@ -29,7 +24,7 @@ async def create_message(
     group_id: str,
     message_data: MessageCreate,
     token: OAuthToken = Depends(require_scope("chat:write")),
-    chat_service: ChatService = Depends(get_chat_service)
+    chat_service: ChatService = Depends(ChatService)
 ):
     """
     Create a new message in a group.
@@ -67,7 +62,7 @@ async def get_messages(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=100, description="Messages per page"),
     token: OAuthToken = Depends(require_scope("chat:read")),
-    chat_service: ChatService = Depends(get_chat_service)
+    chat_service: ChatService = Depends(ChatService)
 ):
     """
     Get paginated message history for a group.
@@ -117,7 +112,7 @@ async def update_message(
     message_id: str,
     message_data: MessageUpdate,
     token: OAuthToken = Depends(require_scope("chat:write")),
-    chat_service: ChatService = Depends(get_chat_service)
+    chat_service: ChatService = Depends(ChatService)
 ):
     """
     Update an existing message (only by sender).
@@ -154,7 +149,7 @@ async def delete_message(
     request: Request,
     message_id: str,
     token: OAuthToken = Depends(require_scope("chat:write")),
-    chat_service: ChatService = Depends(get_chat_service)
+    chat_service: ChatService = Depends(ChatService)
 ):
     """
     Delete a message (soft delete, only by sender).
