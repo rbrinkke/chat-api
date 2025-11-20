@@ -36,7 +36,7 @@ class TestOrganization:
 @dataclass
 class TestGroup:
     """Test chat group definition"""
-    group_id: str
+    conversation_id: str
     name: str
     description: str
     org_id: str
@@ -168,28 +168,28 @@ TEST_USERS = {
 
 TEST_GROUPS = {
     "group-1-org1": TestGroup(
-        group_id="group-1-org1",
+        conversation_id ="group-1-org1",
         name="General (Org 1)",
         description="Main group for org-test-1",
         org_id="org-test-1",
         authorized_user_ids=["admin-user-456", "test-user-123", "reader-user-789"]
     ),
     "group-2-org1": TestGroup(
-        group_id="group-2-org1",
+        conversation_id ="group-2-org1",
         name="Private Group (Org 1)",
         description="Admin-only group",
         org_id="org-test-1",
         authorized_user_ids=["admin-user-456"]  # Admin only
     ),
     "group-1-org2": TestGroup(
-        group_id="group-1-org2",
+        conversation_id ="group-1-org2",
         name="General (Org 2)",
         description="Main group for org-test-2",
         org_id="org-test-2",
         authorized_user_ids=["writer-user-999", "user-888"]
     ),
     "group-ws-test": TestGroup(
-        group_id="group-ws-test",
+        conversation_id ="group-ws-test",
         name="WebSocket Test Group",
         description="Group for WebSocket testing",
         org_id="org-test-1",
@@ -335,7 +335,7 @@ def get_org(org_id: str) -> TestOrganization:
     return TEST_ORGANIZATIONS.get(org_id)
 
 
-def get_group(group_id: str) -> TestGroup:
+def get_group(conversation_id: str) -> TestGroup:
     """Get test group by ID"""
     return TEST_GROUPS.get(group_id)
 
@@ -352,7 +352,7 @@ def user_in_org(user_id: str, org_id: str) -> bool:
     return user and user.org_id == org_id
 
 
-def user_in_group(user_id: str, group_id: str) -> bool:
+def user_in_group(user_id: str, conversation_id: str) -> bool:
     """Check if test user is authorized for group"""
     group = get_group(group_id)
     return group and user_id in group.authorized_user_ids
@@ -373,7 +373,7 @@ def get_org_users(org_id: str) -> Dict[str, TestUser]:
     }
 
 
-def get_group_users(group_id: str) -> List[TestUser]:
+def get_group_users(conversation_id: str) -> List[TestUser]:
     """Get all users authorized for group"""
     group = get_group(group_id)
     if not group:
@@ -467,7 +467,7 @@ async def seed_test_data_to_db(db_client):
     # Insert test messages
     for msg_data in TEST_MESSAGES:
         message = Message(
-            group_id=msg_data["group_id"],
+            conversation_id =msg_data["group_id"],
             sender_id=msg_data["sender_id"],
             content=msg_data["content"],
             is_deleted=msg_data["is_deleted"]

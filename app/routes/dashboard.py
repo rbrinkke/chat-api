@@ -430,7 +430,7 @@ async def get_dashboard_html():
                         <div style="color: #888; margin-bottom: 5px;">Per-Group Breakdown:</div>
                         ${(ws.connections_per_group || []).slice(0, 10).map(g => `
                             <div class="ws-connection">
-                                Group: <span style="color: #00ffff;">${g.group_id}</span> →
+                                Group: <span style="color: #00ffff;">${g.conversation_id}</span> →
                                 <span style="color: #00ff00;">${g.connection_count} connections</span>
                             </div>
                         `).join('') || '<div style="color: #555;">No active connections</div>'}
@@ -471,8 +471,7 @@ async def get_dashboard_html():
                                 <tbody>
                                     ${db.top_active_groups.map(g => `
                                         <tr>
-                                            <td style="color: #00ff00;">${g.group_name}</td>
-                                            <td style="color: #00ffff; font-size: 10px;">${g.group_id}</td>
+                                            <td style="color: #00ffff; font-size: 10px;">${g.conversation_id}</td>
                                             <td style="color: #ffaa00;">${g.message_count}</td>
                                             <td>${formatTimestamp(g.last_message)}</td>
                                         </tr>
@@ -568,7 +567,7 @@ async def get_dashboard_html():
                                 <div class="log-message">
                                     User <span style="color: #00ffff;">${evt.user_id}</span>
                                     <span style="color: ${evt.event_type === 'connected' ? '#00ff00' : '#ffaa00'};">${evt.event_type}</span>
-                                    to group <span style="color: #00ffff;">${evt.group_id}</span>
+                                    to group <span style="color: #00ffff;">${evt.conversation_id}</span>
                                     (${evt.connection_count} connections)
                                 </div>
                             </div>

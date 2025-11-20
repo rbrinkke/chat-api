@@ -351,20 +351,23 @@ def get_optional_token(
 
 def require_permission(permission: str):
     """
-    Require runtime permission check via Auth API.
+    Require runtime permission check via Auth API with group-specific validation.
 
     This replaces scope-based authorization with runtime RBAC checks.
     The JWT token contains ONLY user_id and org_id (NO scopes).
 
     Flow:
     1. Validate JWT token (signature + expiration)
-    2. Call Auth API to check permission (via AuthorizationService)
-    3. Auth API checks database via sp_user_has_permission()
+    2. Call Auth API /check-group endpoint with conversation_id (= group_id)
+    3. Auth API checks: "Is user member of THIS group AND does group have permission?"
     4. Allow or deny based on response
 
     Usage:
-        @app.post("/api/v1/messages")
-        async def create_message(token: OAuthToken = Depends(require_permission("chat:write"))):
+        @app.post("/api/v1/conversations/{conversation_id}/messages")
+        async def create_message(
+            conversation_id: str,
+            token: OAuthToken = Depends(require_permission("chat:write"))
+        ):
             return {"status": "created"}
 
     Args:
@@ -376,17 +379,22 @@ def require_permission(permission: str):
     Raises:
         HTTPException: 401 if token invalid, 403 if permission denied
     """
-    async def permission_checker(token: OAuthToken = Depends(validate_oauth_token)) -> OAuthToken:
+    async def permission_checker(
+        conversation_id: str,  # Path parameter from route
+        token: OAuthToken = Depends(validate_oauth_token)
+    ) -> OAuthToken:
         from app.services.auth_api_client import get_auth_api_client
 
         # Get Auth API client
         auth_client = get_auth_api_client()
 
         try:
-            # Check permission via Auth API (fail-closed)
-            allowed = await auth_client.check_permission_safe(
+            # Check permission in SPECIFIC group (conversation_id = group_id)
+            # Uses new ultrathin /check-group endpoint
+            allowed = await auth_client.check_permission_in_group(
                 user_id=token.user_id,
                 org_id=token.org_id,
+                group_id=conversation_id,  # conversation_id = group_id in Auth API
                 permission=permission
             )
 

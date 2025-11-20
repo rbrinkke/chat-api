@@ -2,14 +2,13 @@
 ChatService - Message operations with multi-tenant org_id validation
 
 Architecture:
-- Auth-API is Single Source of Truth for groups
-- GroupService fetches group data with org_id validation
+- Auth-API handles ALL permission validation via require_permission() decorator
 - Messages stored in MongoDB with org_id for tenant isolation
-- All operations validate: group.org_id == message.org_id == token.org_id
+- No group metadata stored - Auth API is Single Source of Truth
 
 Security Model:
 - Multi-tenant isolation via org_id
-- Group authorization via GroupService (Auth-API)
+- Permission validation via Auth-API (happens in routes before service call)
 - Message ownership validation (sender_id)
 - Prevents cross-org data leaks
 """
@@ -21,7 +20,6 @@ from app.models.message import Message
 from app.core.exceptions import NotFoundError, ForbiddenError, BadRequestError
 from app.core.logging_config import get_logger
 from app.services.connection_manager import manager
-from app.services.group_service import get_group_service, GroupDetails, GroupService
 from app.core import metrics
 
 logger = get_logger(__name__)
@@ -32,61 +30,52 @@ class ChatService:
     Service for handling chat operations with multi-tenant org_id validation.
 
     All operations validate:
-    1. User is member of group (via GroupService)
-    2. Group belongs to user's organization (group.org_id == token.org_id)
+    1. Permission validation happens in routes (via require_permission decorator)
+    2. org_id filtering for multi-tenant isolation
     3. Message operations respect sender ownership
 
     Security:
     - Multi-tenant isolation via org_id filtering
-    - Group authorization via Auth-API
+    - Permission checks via Auth-API (in routes)
     - Message ownership validation
     """
 
-    def __init__(self, group_service: GroupService):
-        """Initialize ChatService with GroupService."""
-        self.group_service = group_service
+    def __init__(self):
+        """Initialize ChatService."""
+        pass
 
     async def create_message(
         self,
-        group_id: str,
+        conversation_id: str,
         org_id: str,
         sender_id: str,
         content: str,
         user_token: str = None
     ) -> Message:
         """
-        Create a new message in a group.
+        Create a new message in a conversation.
 
         Security Flow:
-        1. Validate group exists and user is member (GroupService)
-        2. Validate group.org_id == org_id (multi-tenant security)
-        3. Create message with org_id, group_id, group_name
-        4. Broadcast to WebSocket connections
+        1. Permission already validated in route (via require_permission decorator)
+        2. Create message with org_id + conversation_id
+        3. Broadcast to WebSocket connections
 
         Args:
-            group_id: Group UUID from Auth-API
+            conversation_id: Conversation UUID (maps to Auth-API group for RBAC)
             org_id: Organization UUID from user's JWT token
             sender_id: User UUID from JWT token
             content: Message content (already sanitized)
 
         Returns:
             Created Message object
-
-        Raises:
-            NotFoundError: Group not found
-            ForbiddenError: User not authorized for group or org_id mismatch
         """
         start_time = time.time()
 
         try:
-            # Verify user has access to the group AND org_id matches
-            group = await self._verify_group_access(group_id, org_id, sender_id, user_token)
-
-            # Create message with org_id and denormalized group_name
+            # Create message with org_id (permission already validated in route)
             message = Message(
                 org_id=org_id,
-                group_id=group_id,
-                group_name=group.name,
+                conversation_id=conversation_id,
                 sender_id=sender_id,
                 content=content,
                 created_at=datetime.utcnow(),
@@ -104,21 +93,20 @@ class ChatService:
             logger.info(
                 "message_created",
                 message_id=str(message.id),
-                group_id=group_id,
+                conversation_id =conversation_id,
                 org_id=org_id,
                 sender_id=sender_id
             )
 
             # Broadcast via WebSocket
             await manager.broadcast_to_group(
-                group_id,
+                conversation_id,
                 {
                     "type": "new_message",
                     "message": {
                         "id": str(message.id),
                         "org_id": message.org_id,
-                        "group_id": message.group_id,
-                        "group_name": message.group_name,
+                        "conversation_id": message.conversation_id,
                         "sender_id": message.sender_id,
                         "content": message.content,
                         "created_at": message.created_at.isoformat(),
@@ -129,7 +117,7 @@ class ChatService:
             )
 
             # Track successful message creation
-            metrics.messages_created_total.labels(group_id=group_id).inc()
+            metrics.messages_created_total.labels(conversation_id =conversation_id).inc()
 
             return message
 
@@ -146,12 +134,12 @@ class ChatService:
             duration = time.time() - start_time
             metrics.message_operation_duration_seconds.labels(
                 operation="create",
-                group_id=group_id
+                conversation_id =conversation_id
             ).observe(duration)
 
     async def get_messages(
         self,
-        group_id: str,
+        conversation_id: str,
         org_id: str,
         user_id: str,
         page: int = 1,
@@ -159,16 +147,15 @@ class ChatService:
         user_token: str = None
     ) -> Tuple[List[Message], int]:
         """
-        Get paginated messages for a group with org_id filtering.
+        Get paginated messages for a conversation with org_id filtering.
 
         Security Flow:
-        1. Validate group exists and user is member (GroupService)
-        2. Validate group.org_id == org_id (multi-tenant security)
-        3. Query messages with compound filter: (org_id, group_id, is_deleted)
-        4. MongoDB index optimized: (org_id, group_id, created_at)
+        1. Permission already validated in route (via require_permission decorator)
+        2. Query messages with compound filter: (org_id, conversation_id, is_deleted)
+        3. MongoDB index optimized: (org_id, conversation_id, created_at)
 
         Args:
-            group_id: Group UUID from Auth-API
+            conversation_id: Conversation UUID (maps to Auth-API group for RBAC)
             org_id: Organization UUID from user's JWT token
             user_id: User UUID from JWT token
             page: Page number (1-indexed)
@@ -179,27 +166,21 @@ class ChatService:
 
         Performance:
         - Uses aggregation pipeline for single-roundtrip query
-        - Compound index on (org_id, group_id, created_at)
-        - Redis-cached group validation
-
-        Raises:
-            NotFoundError: Group not found
-            ForbiddenError: User not authorized or org_id mismatch
+        - Compound index on (org_id, conversation_id, created_at)
         """
-        # Verify user has access to the group AND org_id matches
-        await self._verify_group_access(group_id, org_id, user_id, user_token)
+        # Permission already validated in route
 
         # Calculate skip
         skip = (page - 1) * page_size
 
         # Use aggregation pipeline for optimal performance
-        # CRITICAL: Filter by BOTH org_id AND group_id for multi-tenant isolation
+        # CRITICAL: Filter by BOTH org_id AND conversation_id for multi-tenant isolation
         pipeline = [
-            # Match org_id + group_id + non-deleted (uses compound index)
+            # Match org_id + conversation_id + non-deleted (uses compound index)
             {
                 "$match": {
                     "org_id": org_id,
-                    "group_id": group_id,
+                    "conversation_id": conversation_id,
                     "is_deleted": False
                 }
             },
@@ -237,7 +218,7 @@ class ChatService:
 
         logger.info(
             "messages_fetched",
-            group_id=group_id,
+            conversation_id =conversation_id,
             org_id=org_id,
             page=page,
             page_size=page_size,
@@ -250,7 +231,7 @@ class ChatService:
     async def update_message(
         self,
         message_id: str,
-        group_id: str,
+        conversation_id: str,
         org_id: str,
         user_id: str,
         new_content: str,
@@ -261,14 +242,14 @@ class ChatService:
 
         Security Flow:
         1. Fetch message from MongoDB
-        2. Validate message.group_id == group_id (URL consistency)
+        2. Validate message.conversation_id == conversation_id (URL consistency)
         3. Validate message.org_id == org_id (multi-tenant security)
         4. Validate message.sender_id == user_id (ownership)
         5. Update content and broadcast
 
         Args:
             message_id: Message ObjectId string
-            group_id: Group UUID from URL path
+            conversation_id: Group UUID from URL path
             org_id: Organization UUID from user's JWT token
             user_id: User UUID from JWT token
             new_content: Updated message content (already sanitized)
@@ -277,7 +258,7 @@ class ChatService:
             Updated Message object
 
         Raises:
-            NotFoundError: Message not found or group_id mismatch
+            NotFoundError: Message not found or conversation_id mismatch
             ForbiddenError: Not message sender or org_id mismatch
         """
         start_time = time.time()
@@ -288,14 +269,14 @@ class ChatService:
             if not message:
                 raise NotFoundError("Message not found")
 
-            # CRITICAL: Validate group_id matches URL (prevents information leakage)
+            # CRITICAL: Validate conversation_id matches URL (prevents information leakage)
             # Return 404 (not 400/403) to avoid revealing message existence in other groups
-            if message.group_id != group_id:
+            if message.conversation_id != conversation_id:
                 logger.warning(
                     "message_group_mismatch",
                     message_id=message_id,
-                    url_group_id=group_id,
-                    message_group_id=message.group_id,
+                    url_group_id=conversation_id,
+                    message_group_id=message.conversation_id,
                     user_id=user_id,
                     reason="group_id_mismatch_returns_404"
                 )
@@ -338,14 +319,13 @@ class ChatService:
 
             # Broadcast via WebSocket
             await manager.broadcast_to_group(
-                message.group_id,
+                message.conversation_id,
                 {
                     "type": "message_updated",
                     "message": {
                         "id": str(message.id),
                         "org_id": message.org_id,
-                        "group_id": message.group_id,
-                        "group_name": message.group_name,
+                        "conversation_id": message.conversation_id,
                         "sender_id": message.sender_id,
                         "content": message.content,
                         "created_at": message.created_at.isoformat(),
@@ -356,7 +336,7 @@ class ChatService:
             )
 
             # Track successful update
-            metrics.messages_updated_total.labels(group_id=message.group_id).inc()
+            metrics.messages_updated_total.labels(conversation_id =message.conversation_id).inc()
 
             return message
 
@@ -373,13 +353,13 @@ class ChatService:
             duration = time.time() - start_time
             metrics.message_operation_duration_seconds.labels(
                 operation="update",
-                group_id=message.group_id if 'message' in locals() else "unknown"
+                conversation_id =message.conversation_id if 'message' in locals() else "unknown"
             ).observe(duration)
 
     async def delete_message(
         self,
         message_id: str,
-        group_id: str,
+        conversation_id: str,
         org_id: str,
         user_id: str,
         user_token: str = None,
@@ -390,21 +370,21 @@ class ChatService:
 
         Security Flow:
         1. Fetch message from MongoDB
-        2. Validate message.group_id == group_id (URL consistency)
+        2. Validate message.conversation_id == conversation_id (URL consistency)
         3. Validate message.org_id == org_id (multi-tenant security)
         4. Validate message.sender_id == user_id (ownership) OR is_admin=True
         5. Soft delete and broadcast
 
         Args:
             message_id: Message ObjectId string
-            group_id: Group UUID from URL path
+            conversation_id: Group UUID from URL path
             org_id: Organization UUID from user's JWT token
             user_id: User UUID from JWT token
             user_token: Raw JWT token (optional)
             is_admin: True if user has chat:admin permission (bypasses ownership check)
 
         Raises:
-            NotFoundError: Message not found or group_id mismatch
+            NotFoundError: Message not found or conversation_id mismatch
             ForbiddenError: Not message sender or org_id mismatch
         """
         start_time = time.time()
@@ -415,14 +395,14 @@ class ChatService:
             if not message:
                 raise NotFoundError("Message not found")
 
-            # CRITICAL: Validate group_id matches URL (prevents information leakage)
+            # CRITICAL: Validate conversation_id matches URL (prevents information leakage)
             # Return 404 (not 400/403) to avoid revealing message existence in other groups
-            if message.group_id != group_id:
+            if message.conversation_id != conversation_id:
                 logger.warning(
                     "message_group_mismatch",
                     message_id=message_id,
-                    url_group_id=group_id,
-                    message_group_id=message.group_id,
+                    url_group_id=conversation_id,
+                    message_group_id=message.conversation_id,
                     user_id=user_id,
                     reason="group_id_mismatch_returns_404"
                 )
@@ -472,7 +452,7 @@ class ChatService:
 
             # Broadcast via WebSocket
             await manager.broadcast_to_group(
-                message.group_id,
+                message.conversation_id,
                 {
                     "type": "message_deleted",
                     "message_id": str(message.id)
@@ -480,7 +460,7 @@ class ChatService:
             )
 
             # Track successful deletion
-            metrics.messages_deleted_total.labels(group_id=message.group_id).inc()
+            metrics.messages_deleted_total.labels(conversation_id =message.conversation_id).inc()
 
         except Exception as e:
             # Track errors
@@ -495,69 +475,6 @@ class ChatService:
             duration = time.time() - start_time
             metrics.message_operation_duration_seconds.labels(
                 operation="delete",
-                group_id=message.group_id if 'message' in locals() else "unknown"
+                conversation_id =message.conversation_id if 'message' in locals() else "unknown"
             ).observe(duration)
 
-    async def _verify_group_access(
-        self,
-        group_id: str,
-        expected_org_id: str,
-        user_id: str,
-        user_token: str = None
-    ) -> GroupDetails:
-        """
-        Verify user has access to group AND group belongs to user's organization.
-
-        Security Checks:
-        1. Group exists in Auth-API
-        2. Group.org_id == expected_org_id (multi-tenant isolation)
-        3. User is member of group (user_id in group.member_ids)
-
-        Args:
-            group_id: Group UUID from Auth-API
-            expected_org_id: Organization UUID from user's JWT token
-            user_id: User UUID from JWT token
-
-        Returns:
-            GroupDetails if all checks pass
-
-        Raises:
-            NotFoundError: Group not found
-            ForbiddenError: User not authorized or org_id mismatch
-
-        Performance:
-            - Redis-cached group lookups (300s TTL)
-            - Auth-API called only on cache miss
-            - Org_id validation happens in GroupService
-        """
-        # GroupService handles:
-        # 1. Fetch from Auth-API (with caching)
-        # 2. Validate group.org_id == expected_org_id
-        # 3. Returns None if unauthorized
-        group = await self.group_service.get_group_details(
-            group_id=group_id,
-            expected_org_id=expected_org_id,
-            user_token=user_token
-        )
-
-        if not group:
-            logger.warning(
-                "group_access_denied",
-                group_id=group_id,
-                org_id=expected_org_id,
-                user_id=user_id,
-                reason="group_not_found_or_org_mismatch"
-            )
-            raise NotFoundError("Group not found")
-
-        # Verify user is member of the group
-        if user_id not in group.member_ids:
-            logger.warning(
-                "user_not_member_of_group",
-                group_id=group_id,
-                org_id=expected_org_id,
-                user_id=user_id
-            )
-            raise ForbiddenError("You don't have access to this group")
-
-        return group

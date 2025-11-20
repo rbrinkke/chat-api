@@ -39,9 +39,9 @@ def require_permission(permission: str, custom_cache_ttl: int = None):
     FastAPI dependency factory for permission checks.
 
     Usage in routes:
-        @router.post("/groups/{group_id}/messages")
+        @router.post("/conversations/{conversation_id}/messages")
         async def create_message(
-            group_id: str,
+            conversation_id: str,
             auth_context: AuthContext = Depends(require_permission("chat:send_message"))
         ):
             # If this code runs, user has permission
@@ -179,9 +179,9 @@ def require_all_permissions(*permissions: str):
     Require ALL of the specified permissions (AND logic).
 
     Usage:
-        @router.delete("/groups/{group_id}")
+        @router.delete("/conversations/{conversation_id}")
         async def delete_group(
-            group_id: str,
+            conversation_id: str,
             auth_context: AuthContext = Depends(
                 require_all_permissions("chat:delete", "chat:manage_members")
             )

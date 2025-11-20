@@ -208,6 +208,111 @@ class AuthAPIClient:
             )
             return False
 
+    async def check_permission_in_group(
+        self,
+        user_id: str,
+        org_id: str,
+        group_id: str,
+        permission: str
+    ) -> bool:
+        """
+        Ultrathin group-specific permission check (FAST & SIMPLE).
+
+        Checks if user has permission in SPECIFIC group only.
+        Returns simple boolean - perfect for chat access control.
+
+        Args:
+            user_id: User UUID string
+            org_id: Organization UUID string
+            group_id: Group UUID string (specific group to check)
+            permission: Permission string (e.g., "chat:read", "chat:write")
+
+        Returns:
+            bool: True if user has permission in that specific group, False otherwise
+                  (including on errors - fail-closed!)
+
+        Example:
+            # Check if user can read chat in "vrienden" group
+            can_read = await client.check_permission_in_group(
+                user_id="550e8400-e29b-41d4-a716-446655440000",
+                org_id="660e8400-e29b-41d4-a716-446655440000",
+                group_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                permission="chat:read"
+            )
+
+            if can_read:
+                # Allow reading messages in vrienden group
+                return messages
+            else:
+                # Deny access to this group's messages
+                raise HTTPException(403, "No access to this group")
+        """
+        endpoint = f"{self.auth_api_url}/api/v1/authorization/check-group"
+
+        payload = {
+            "user_id": user_id,
+            "org_id": org_id,
+            "group_id": group_id,
+            "permission": permission
+        }
+
+        headers = {
+            "X-Service-Token": self.service_token,
+            "Content-Type": "application/json"
+        }
+
+        logger.debug(
+            "auth_api_group_permission_check",
+            extra={
+                "user_id": user_id,
+                "org_id": org_id,
+                "group_id": group_id,
+                "permission": permission,
+                "endpoint": endpoint
+            }
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    endpoint,
+                    json=payload,
+                    headers=headers
+                )
+
+                response.raise_for_status()
+                result = response.json()
+
+                allowed = result.get("allowed", False)
+
+                logger.info(
+                    "auth_api_group_permission_result",
+                    extra={
+                        "user_id": user_id,
+                        "org_id": org_id,
+                        "group_id": group_id,
+                        "permission": permission,
+                        "allowed": allowed
+                    }
+                )
+
+                return allowed
+
+        except Exception as e:
+            logger.error(
+                "auth_api_group_check_failed",
+                extra={
+                    "user_id": user_id,
+                    "org_id": org_id,
+                    "group_id": group_id,
+                    "permission": permission,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "fail_mode": "closed"  # Deny on errors (secure)
+                }
+            )
+            return False  # Fail closed!
+
 
 # Singleton instance for dependency injection
 _auth_api_client: Optional[AuthAPIClient] = None

@@ -12,51 +12,51 @@ class ConnectionManager:
     """Manages WebSocket connections for chat groups."""
 
     def __init__(self):
-        # group_id -> set of websockets
+        # conversation_id -> set of websockets
         self.active_connections: Dict[str, Set[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket, group_id: str):
+    async def connect(self, websocket: WebSocket, conversation_id: str):
         """Accept and register a WebSocket connection for a group."""
         await websocket.accept()
 
-        if group_id not in self.active_connections:
-            self.active_connections[group_id] = set()
+        if conversation_id not in self.active_connections:
+            self.active_connections[conversation_id] = set()
 
-        self.active_connections[group_id].add(websocket)
+        self.active_connections[conversation_id].add(websocket)
 
         # Update Prometheus metrics
-        metrics.websocket_connections_total.labels(group_id=group_id).inc()
-        metrics.websocket_connections_active.labels(group_id=group_id).set(
-            len(self.active_connections[group_id])
+        metrics.websocket_connections_total.labels(conversation_id =conversation_id).inc()
+        metrics.websocket_connections_active.labels(conversation_id =conversation_id).set(
+            len(self.active_connections[conversation_id])
         )
 
-        logger.info(f"WebSocket connected to group {group_id}. Total: {len(self.active_connections[group_id])}")
+        logger.info(f"WebSocket connected to group {conversation_id}. Total: {len(self.active_connections[conversation_id])}")
 
-    def disconnect(self, websocket: WebSocket, group_id: str, reason: str = "normal"):
+    def disconnect(self, websocket: WebSocket, conversation_id: str, reason: str = "normal"):
         """Unregister a WebSocket connection."""
-        if group_id in self.active_connections:
-            self.active_connections[group_id].discard(websocket)
+        if conversation_id in self.active_connections:
+            self.active_connections[conversation_id].discard(websocket)
 
             # Update Prometheus metrics
             metrics.websocket_disconnections_total.labels(
-                group_id=group_id,
+                conversation_id =conversation_id,
                 reason=reason
             ).inc()
 
             # Update active connections gauge
-            if self.active_connections[group_id]:
-                metrics.websocket_connections_active.labels(group_id=group_id).set(
-                    len(self.active_connections[group_id])
+            if self.active_connections[conversation_id]:
+                metrics.websocket_connections_active.labels(conversation_id =conversation_id).set(
+                    len(self.active_connections[conversation_id])
                 )
             else:
                 # No more connections, set to 0
-                metrics.websocket_connections_active.labels(group_id=group_id).set(0)
+                metrics.websocket_connections_active.labels(conversation_id =conversation_id).set(0)
 
             # Clean up empty groups
-            if not self.active_connections[group_id]:
-                del self.active_connections[group_id]
+            if not self.active_connections[conversation_id]:
+                del self.active_connections[conversation_id]
 
-            logger.info(f"WebSocket disconnected from group {group_id}")
+            logger.info(f"WebSocket disconnected from group {conversation_id}")
 
     async def send_personal_message(self, message: dict, websocket: WebSocket):
         """Send a message to a specific WebSocket."""
@@ -65,7 +65,7 @@ class ConnectionManager:
         except Exception as e:
             logger.error(f"Error sending personal message: {e}")
 
-    async def broadcast_to_group(self, group_id: str, message: dict):
+    async def broadcast_to_group(self, conversation_id: str, message: dict):
         """
         Broadcast a message to all connections in a group.
 
@@ -73,10 +73,10 @@ class ConnectionManager:
         connections in parallel instead of sequentially. This dramatically
         improves broadcast performance with many concurrent connections.
         """
-        if group_id not in self.active_connections:
+        if conversation_id not in self.active_connections:
             return
 
-        connections = list(self.active_connections[group_id])
+        connections = list(self.active_connections[conversation_id])
 
         # Create tasks for parallel execution
         async def send_to_connection(websocket: WebSocket) -> tuple[WebSocket, Exception | None]:
@@ -95,22 +95,22 @@ class ConnectionManager:
         )
 
         # Track successful broadcast
-        metrics.websocket_messages_broadcast_total.labels(group_id=group_id).inc()
+        metrics.websocket_messages_broadcast_total.labels(conversation_id =conversation_id).inc()
 
         # Clean up any failed connections
         error_count = 0
         for websocket, error in results:
             if error is not None:
                 error_count += 1
-                self.disconnect(websocket, group_id, reason="broadcast_error")
+                self.disconnect(websocket, conversation_id, reason="broadcast_error")
 
         # Track broadcast errors
         if error_count > 0:
-            metrics.websocket_broadcast_errors_total.labels(group_id=group_id).inc(error_count)
+            metrics.websocket_broadcast_errors_total.labels(conversation_id =conversation_id).inc(error_count)
 
-    def get_group_connection_count(self, group_id: str) -> int:
+    def get_group_connection_count(self, conversation_id: str) -> int:
         """Get the number of active connections for a group."""
-        return len(self.active_connections.get(group_id, set()))
+        return len(self.active_connections.get(conversation_id, set()))
 
     async def shutdown_all(self):
         """
@@ -129,7 +129,7 @@ class ConnectionManager:
 
         # Collect all connections from all groups
         all_connections = []
-        for group_id, connections in self.active_connections.items():
+        for conversation_id, connections in self.active_connections.items():
             all_connections.extend(connections)
 
         # Send shutdown notification and close all connections in parallel

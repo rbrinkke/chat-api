@@ -137,7 +137,7 @@ echo ""
 # Test 1.1: GET messages (requires chat:read)
 echo "TEST 1.1: GET messages (requires chat:read)"
 RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
-  "http://localhost:8001/api/chat/groups/$VRIENDEN_GROUP_ID/messages" \
+  "http://localhost:8001/api/chat/conversations/$VRIENDEN_GROUP_ID/messages" \
   -H "Authorization: Bearer $JWT_TOKEN")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
@@ -154,7 +154,7 @@ echo ""
 # Test 1.2: POST message (requires chat:write)
 echo "TEST 1.2: POST message (requires chat:write)"
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-  "http://localhost:8001/api/chat/groups/$VRIENDEN_GROUP_ID/messages" \
+  "http://localhost:8001/api/chat/conversations/$VRIENDEN_GROUP_ID/messages" \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"content\":\"Test message at $(date +%H:%M:%S)\"}")
@@ -195,7 +195,7 @@ echo ""
 # Test 2.1: GET messages WITHOUT permission (should FAIL)
 echo "TEST 2.1: GET messages WITHOUT permission (should FAIL with 403)"
 RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
-  "http://localhost:8001/api/chat/groups/$VRIENDEN_GROUP_ID/messages" \
+  "http://localhost:8001/api/chat/conversations/$VRIENDEN_GROUP_ID/messages" \
   -H "Authorization: Bearer $JWT_TOKEN")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
@@ -213,7 +213,7 @@ echo ""
 # Test 2.2: POST message WITHOUT permission (should FAIL)
 echo "TEST 2.2: POST message WITHOUT permission (should FAIL with 403)"
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-  "http://localhost:8001/api/chat/groups/$VRIENDEN_GROUP_ID/messages" \
+  "http://localhost:8001/api/chat/conversations/$VRIENDEN_GROUP_ID/messages" \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"content\":\"This should fail\"}")
@@ -249,10 +249,10 @@ VALUES ('$USER_ID'::UUID, '$MODERATORS_GROUP_ID'::UUID, '$USER_ID'::UUID);
 echo -e "${BLUE}👤 User now in MODERATORS group${NC}"
 echo ""
 
-# Test 3.1: GET messages WITH admin permission
-echo "TEST 3.1: GET messages (admin has all permissions)"
+# Test 3.1: GET messages WITH admin permission (in THEIR OWN group)
+echo "TEST 3.1: GET messages (admin in their own group)"
 RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
-  "http://localhost:8001/api/chat/groups/$VRIENDEN_GROUP_ID/messages" \
+  "http://localhost:8001/api/chat/conversations/$MODERATORS_GROUP_ID/messages" \
   -H "Authorization: Bearer $JWT_TOKEN")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)

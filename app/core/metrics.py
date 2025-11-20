@@ -15,31 +15,31 @@ from prometheus_client import Counter, Gauge, Histogram
 websocket_connections_active = Gauge(
     'chat_websocket_connections_active',
     'Number of active WebSocket connections',
-    ['group_id']
+    ['conversation_id']
 )
 
 websocket_connections_total = Counter(
     'chat_websocket_connections_total',
     'Total number of WebSocket connections established',
-    ['group_id']
+    ['conversation_id']
 )
 
 websocket_disconnections_total = Counter(
     'chat_websocket_disconnections_total',
     'Total number of WebSocket disconnections',
-    ['group_id', 'reason']
+    ['conversation_id', 'reason']
 )
 
 websocket_messages_broadcast_total = Counter(
     'chat_websocket_messages_broadcast_total',
     'Total number of messages broadcast via WebSocket',
-    ['group_id']
+    ['conversation_id']
 )
 
 websocket_broadcast_errors_total = Counter(
     'chat_websocket_broadcast_errors_total',
     'Total number of WebSocket broadcast failures',
-    ['group_id']
+    ['conversation_id']
 )
 
 # ============================================================================
@@ -49,25 +49,25 @@ websocket_broadcast_errors_total = Counter(
 messages_created_total = Counter(
     'chat_messages_created_total',
     'Total number of messages created',
-    ['group_id']
+    ['conversation_id']
 )
 
 messages_updated_total = Counter(
     'chat_messages_updated_total',
     'Total number of messages updated',
-    ['group_id']
+    ['conversation_id']
 )
 
 messages_deleted_total = Counter(
     'chat_messages_deleted_total',
     'Total number of messages soft-deleted',
-    ['group_id']
+    ['conversation_id']
 )
 
 message_operation_duration_seconds = Histogram(
     'chat_message_operation_duration_seconds',
     'Duration of message operations in seconds',
-    ['operation', 'group_id'],
+    ['operation', 'conversation_id'],
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
 )
 

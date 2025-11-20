@@ -16,7 +16,7 @@ import psutil
 import time
 
 from app.core.logging_config import get_logger
-# Group model removed - groups now fetched from Auth-API via GroupService
+# Group model removed - groups now fetched from Auth-API via ConversationService
 from app.models.message import Message
 from app.services.connection_manager import ConnectionManager
 from beanie import PydanticObjectId
@@ -105,13 +105,13 @@ class MetricsCollector:
             "correlation_id": correlation_id
         })
 
-    def record_ws_event(self, event_type: str, group_id: str, user_id: str,
+    def record_ws_event(self, event_type: str, conversation_id: str, user_id: str,
                        connection_count: int):
         """Record a WebSocket connection event."""
         self.ws_events.append({
             "timestamp": datetime.utcnow().isoformat(),
             "event_type": event_type,  # "connected" or "disconnected"
-            "group_id": group_id,
+            "conversation_id": conversation_id,
             "user_id": user_id,
             "connection_count": connection_count
         })
@@ -237,7 +237,7 @@ class DashboardService:
             top_groups = await self._get_top_active_groups(limit=10)
 
             # Count unique groups from messages
-            unique_groups = await Message.distinct("group_id")
+            unique_groups = await Message.distinct("conversation_id")
             total_groups = len(unique_groups)
 
             # Average messages per group
@@ -264,15 +264,13 @@ class DashboardService:
         """
         Get most active groups by message count.
 
-        Uses denormalized group_name from Message model (no Auth-API call needed).
         """
         try:
             # Aggregate messages by group
             pipeline = [
                 {"$match": {"is_deleted": False}},
                 {"$group": {
-                    "_id": "$group_id",
-                    "group_name": {"$first": "$group_name"},  # Get group_name from denormalized field
+                    "_id": "$conversation_id",
                     "message_count": {"$sum": 1},
                     "last_message": {"$max": "$created_at"}
                 }},
@@ -286,8 +284,7 @@ class DashboardService:
             enriched = []
             for result in results:
                 enriched.append({
-                    "group_id": str(result["_id"]),
-                    "group_name": result.get("group_name", "Unknown"),  # From denormalized field
+                    "conversation_id": str(result["_id"]),
                     "message_count": result["message_count"],
                     "last_message": result["last_message"].isoformat() if result.get("last_message") else None,
                 })
@@ -306,9 +303,9 @@ class DashboardService:
 
         # Per-group breakdown
         group_connections = []
-        for group_id, group_conns in connections.items():
+        for conversation_id, group_conns in connections.items():
             group_connections.append({
-                "group_id": group_id,
+                "conversation_id": conversation_id,
                 "connection_count": len(group_conns),
             })
 

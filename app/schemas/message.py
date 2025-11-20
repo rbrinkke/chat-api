@@ -38,13 +38,11 @@ class MessageResponse(BaseModel):
 
     Multi-Tenant Architecture:
     - org_id: Organization UUID for client-side filtering
-    - group_id: Group UUID from Auth-API
-    - group_name: Denormalized for performance (no Auth-API call needed)
+    - conversation_id: Conversation UUID (maps to Auth-API group for RBAC)
     """
     id: str
     org_id: str  # Organization UUID (multi-tenant isolation)
-    group_id: str  # Group UUID from Auth-API
-    group_name: str  # Denormalized group name
+    conversation_id: str  # Conversation UUID (maps to Auth-API group for RBAC)
     sender_id: str
     content: str
     created_at: datetime
@@ -66,8 +64,7 @@ class MessageResponse(BaseModel):
         return cls(
             id=str(message.id),
             org_id=message.org_id,
-            group_id=message.group_id,
-            group_name=message.group_name,
+            conversation_id =message.conversation_id,
             sender_id=message.sender_id,
             content=message.content,
             created_at=message.created_at,

@@ -15,7 +15,7 @@ from httpx import AsyncClient
 
 
 class TestMessageCreation:
-    """Tests for POST /api/chat/groups/{group_id}/messages"""
+    """Tests for POST /api/chat/conversations/{conversation_id}/messages"""
 
     @pytest.mark.asyncio
     async def test_create_message_success(
@@ -109,7 +109,7 @@ class TestMessageCreation:
 
 
 class TestMessageRetrieval:
-    """Tests for GET /api/chat/groups/{group_id}/messages"""
+    """Tests for GET /api/chat/conversations/{conversation_id}/messages"""
 
     @pytest.mark.asyncio
     async def test_get_messages_success(
@@ -138,7 +138,7 @@ class TestMessageRetrieval:
         from app.models.message import Message
         for i in range(10):
             msg = Message(
-                group_id=str(test_group.id),
+                conversation_id =str(test_group.id),
                 sender_id="test-user-123",
                 content=f"Message {i}"
             )
@@ -192,7 +192,7 @@ class TestMessageUpdate:
         # Create message from different user
         from app.models.message import Message
         message = Message(
-            group_id=str(test_group.id),
+            conversation_id =str(test_group.id),
             sender_id="test-user-456",
             content="Someone else's message"
         )

@@ -1,5 +1,5 @@
 """
-Test GroupService integration with Auth-API.
+Test ConversationService integration with Auth-API.
 
 THIS IS THE CORE - without groups working, chat doesn't work!
 
@@ -21,15 +21,15 @@ load_dotenv()
 
 from app.config import settings
 from app.core.logging_config import get_logger, setup_logging
-from app.services.group_service import GroupService
+from app.services.conversation_service import ConversationService
 from app.core.service_token_manager import init_service_token_manager, get_service_token_manager
 
 setup_logging()
 logger = get_logger(__name__)
 
 
-async def test_group_service():
-    """Test GroupService - THE CORE of chat functionality!"""
+async def test_conversation_service():
+    """Test ConversationService - THE CORE of chat functionality!"""
 
     print("\n" + "="*80)
     print("GROUPSERVICE INTEGRATION TEST - THE CORE OF CHAT!")
@@ -52,10 +52,10 @@ async def test_group_service():
         token_manager = get_service_token_manager()
         print("   ✅ ServiceTokenManager initialized\n")
 
-        # Create GroupService
-        print("2. Creating GroupService...")
-        group_service = GroupService()
-        print("   ✅ GroupService created\n")
+        # Create ConversationService
+        print("2. Creating ConversationService...")
+        conversation_service = ConversationService()
+        print("   ✅ ConversationService created\n")
 
         # Test 1: Fetch a real group
         # First, let's try to get ANY group from Auth-API to see what exists
@@ -70,13 +70,13 @@ async def test_group_service():
 
         print(f"   Attempting to fetch group:")
         print(f"   - org_id: {test_org_id}")
-        print(f"   - group_id: {test_group_id}")
+        print(f"   - conversation_id: {test_group_id}")
         print(f"   - user_id: {test_user_id}\n")
 
         try:
-            group = await group_service.get_group(
+            group = await conversation_service.get_group(
                 org_id=test_org_id,
-                group_id=test_group_id,
+                conversation_id =test_group_id,
                 user_id=test_user_id
             )
 
@@ -97,9 +97,9 @@ async def test_group_service():
         fake_group_id = "00000000-0000-0000-0000-000000000000"
 
         try:
-            await group_service.get_group(
+            await conversation_service.get_group(
                 org_id=test_org_id,
-                group_id=fake_group_id,
+                conversation_id =fake_group_id,
                 user_id=test_user_id
             )
             print("   ❌ Should have raised NotFoundError!")
@@ -119,7 +119,7 @@ async def test_group_service():
         print("GROUPSERVICE TEST SUMMARY")
         print("="*80)
         print("✅ ServiceTokenManager working")
-        print("✅ GroupService created successfully")
+        print("✅ ConversationService created successfully")
         print("✅ Error handling working (non-existent groups)")
         print("✅ Service token authentication working")
         print("\nℹ️  Note: To test real group fetching, create groups in Auth-API first!")
@@ -130,10 +130,10 @@ async def test_group_service():
 
     except Exception as e:
         print(f"\n❌ TEST FAILED: {type(e).__name__}: {str(e)}\n")
-        logger.error("group_service_test_failed", error=str(e), exc_info=True)
+        logger.error("conversation_service_test_failed", error=str(e), exc_info=True)
         return False
 
 
 if __name__ == "__main__":
-    success = asyncio.run(test_group_service())
+    success = asyncio.run(test_conversation_service())
     sys.exit(0 if success else 1)

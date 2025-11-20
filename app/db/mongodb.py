@@ -14,7 +14,7 @@ async def init_db():
     Architecture Change:
     - Group model REMOVED - Auth-API is Single Source of Truth for groups
     - Only Message model remains in MongoDB
-    - Groups fetched via GroupService from Auth-API with Redis caching
+    - Groups fetched via ConversationService from Auth-API with Redis caching
 
     Connection pool configuration:
     - maxPoolSize=50: Maximum number of connections (prevents exhaustion)

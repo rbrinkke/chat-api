@@ -1,21 +1,18 @@
 """
-WebSocket endpoint for real-time chat with OAuth 2.0 and multi-tenant org_id validation.
+WebSocket endpoint for real-time chat with OAuth 2.0 validation.
 
 Architecture:
 - OAuth 2.0 HS256 token validation (shared secret with Auth-API)
-- GroupService validates group access and org_id
-- Multi-tenant isolation via org_id validation
+- Permission validation via Auth API (chat:read required)
 - Real-time message broadcasting via ConnectionManager
 
 Security:
 - JWT token validation via query parameter
-- Validates user is member of group (GroupService)
-- Validates group.org_id == token.org_id (multi-tenant security)
+- Permission check via Auth API
 """
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
 from app.services.connection_manager import manager
-from app.services.group_service import get_group_service
 from app.core.exceptions import NotFoundError, ForbiddenError
 from app.core.logging_config import get_logger
 from app.core.oauth_validator import decode_token_string, OAuthToken
@@ -51,10 +48,10 @@ async def verify_websocket_oauth_token(token: str) -> OAuthToken:
     return decode_token_string(token)
 
 
-@router.websocket("/ws/{group_id}")
+@router.websocket("/ws/{conversation_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
-    group_id: str,
+    conversation_id: str,
     token: str = Query(..., description="OAuth 2.0 JWT access token")
 ):
     """
@@ -66,7 +63,7 @@ async def websocket_endpoint(
     Multi-Tenant Security:
     1. Validates JWT token (OAuth 2.0 HS256)
     2. Validates token has chat:read scope
-    3. Validates group exists in Auth-API (via GroupService)
+    3. Validates group exists in Auth-API (via ConversationService)
     4. Validates group.org_id == token.org_id (multi-tenant isolation)
     5. Validates user is member of group
 
@@ -76,7 +73,7 @@ async def websocket_endpoint(
 
     Args:
         websocket: WebSocket connection
-        group_id: Group UUID from Auth-API
+        conversation_id: Conversation UUID (maps to Auth-API group for RBAC)
         token: OAuth 2.0 JWT access token (from Auth-API)
 
     Raises:
@@ -99,13 +96,13 @@ async def websocket_endpoint(
                 "websocket_token_validated",
                 user_id=user_id,
                 org_id=org_id,
-                group_id=group_id,
+                conversation_id =conversation_id,
                 scopes=oauth_token.scopes
             )
         except JWTError as e:
             logger.warning(
                 "websocket_authentication_failed",
-                group_id=group_id,
+                conversation_id =conversation_id,
                 error=str(e)
             )
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -117,40 +114,33 @@ async def websocket_endpoint(
                 "websocket_insufficient_scope",
                 user_id=user_id,
                 org_id=org_id,
-                group_id=group_id,
+                conversation_id =conversation_id,
                 required_scope="chat:read",
                 available_scopes=oauth_token.scopes
             )
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
-        # Step 3: Verify user has access to group AND org_id matches
-        # GroupService handles:
-        # - Fetch group from Auth-API (with caching)
-        # - Validate group.org_id == org_id
-        # - Validate user in group.member_ids
+        # Step 3: Verify user has permission via Auth API
+        # Auth API handles:
+        # - Check if user has chat:read permission for this conversation (group)
+        # - Validates org_id matches
+        # - Validates user is member
         try:
-            group_service = get_group_service()
-            group = await group_service.get_group_details(
-                group_id=group_id,
-                expected_org_id=org_id
+            from app.services.auth_api_client import get_auth_api_client
+            auth_client = get_auth_api_client()
+
+            has_permission = await auth_client.check_permission_safe(
+                user_id=user_id,
+                org_id=org_id,
+                permission="chat:read",
+                resource_id=conversation_id
             )
 
-            if not group:
-                logger.warning(
-                    "websocket_group_not_found_or_org_mismatch",
-                    group_id=group_id,
-                    org_id=org_id,
-                    user_id=user_id
-                )
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
-
-            # Verify user is member of the group
-            if user_id not in group.member_ids:
+            if not has_permission:
                 logger.warning(
                     "websocket_user_not_member",
-                    group_id=group_id,
+                    conversation_id =conversation_id,
                     org_id=org_id,
                     user_id=user_id
                 )
@@ -160,7 +150,7 @@ async def websocket_endpoint(
         except Exception as e:
             logger.error(
                 "websocket_group_validation_failed",
-                group_id=group_id,
+                conversation_id =conversation_id,
                 org_id=org_id,
                 user_id=user_id,
                 error=str(e)
@@ -169,12 +159,12 @@ async def websocket_endpoint(
             return
 
         # All validations passed - accept connection
-        await manager.connect(websocket, group_id)
-        connection_count = manager.get_group_connection_count(group_id)
+        await manager.connect(websocket, conversation_id)
+        connection_count = manager.get_group_connection_count(conversation_id)
 
         logger.info(
             "websocket_connected",
-            group_id=group_id,
+            conversation_id =conversation_id,
             org_id=org_id,
             user_id=user_id,
             connection_count=connection_count
@@ -185,7 +175,7 @@ async def websocket_endpoint(
             try:
                 metrics_collector.record_ws_event(
                     event_type="connected",
-                    group_id=group_id,
+                    conversation_id =conversation_id,
                     user_id=user_id,
                     connection_count=connection_count
                 )
@@ -196,8 +186,7 @@ async def websocket_endpoint(
         await manager.send_personal_message(
             {
                 "type": "connected",
-                "message": f"Connected to group {group_id}",
-                "group_name": group.name,
+                "message": f"Connected to group {conversation_id}",
                 "user_id": user_id,
                 "org_id": org_id
             },
@@ -206,7 +195,7 @@ async def websocket_endpoint(
 
         # Broadcast user joined
         await manager.broadcast_to_group(
-            group_id,
+            conversation_id,
             {
                 "type": "user_joined",
                 "user_id": user_id,
@@ -228,7 +217,7 @@ async def websocket_endpoint(
             elif data.get("type") == "typing":
                 # Broadcast typing indicator
                 await manager.broadcast_to_group(
-                    group_id,
+                    conversation_id,
                     {
                         "type": "user_typing",
                         "user_id": user_id
@@ -238,18 +227,18 @@ async def websocket_endpoint(
                 # Echo back for now (messages are created via REST API)
                 logger.debug(
                     "websocket_message_received",
-                    group_id=group_id,
+                    conversation_id =conversation_id,
                     org_id=org_id,
                     user_id=user_id,
                     message_type=data.get("type", "unknown")
                 )
 
     except WebSocketDisconnect:
-        manager.disconnect(websocket, group_id)
-        connection_count = manager.get_group_connection_count(group_id)
+        manager.disconnect(websocket, conversation_id)
+        connection_count = manager.get_group_connection_count(conversation_id)
         logger.info(
             "websocket_disconnected",
-            group_id=group_id,
+            conversation_id =conversation_id,
             org_id=org_id if org_id else "unknown",
             user_id=user_id if user_id else "unknown",
             connection_count=connection_count
@@ -260,7 +249,7 @@ async def websocket_endpoint(
             try:
                 metrics_collector.record_ws_event(
                     event_type="disconnected",
-                    group_id=group_id,
+                    conversation_id =conversation_id,
                     user_id=user_id if user_id else "unknown",
                     connection_count=connection_count
                 )
@@ -269,7 +258,7 @@ async def websocket_endpoint(
 
         # Broadcast user left
         await manager.broadcast_to_group(
-            group_id,
+            conversation_id,
             {
                 "type": "user_left",
                 "user_id": user_id if user_id else "unknown",
@@ -282,7 +271,7 @@ async def websocket_endpoint(
             "websocket_error",
             error_type=type(e).__name__,
             error=str(e),
-            group_id=group_id,
+            conversation_id =conversation_id,
             org_id=org_id if org_id else "unknown",
             user_id=user_id if user_id else "unknown",
             exc_info=True  # Include stack trace for debugging
