@@ -25,7 +25,6 @@ from datetime import datetime
 import aiohttp
 
 from app.core.logging_config import get_logger
-from app.core.service_auth import get_service_token_manager
 from app.core.cache import cache, serialize_for_cache, deserialize_from_cache
 from app.config import settings
 
@@ -89,9 +88,8 @@ class GroupService:
     """
 
     def __init__(self):
-        """Initialize GroupService with Auth-API URL and token manager."""
+        """Initialize GroupService with Auth-API URL (NO OAuth - direct HTTP)."""
         self.auth_api_url = settings.AUTH_API_URL.rstrip('/')
-        self.token_manager = get_service_token_manager()
         self.cache_ttl_details = 300  # 5 minutes for group details
         self._session: Optional[aiohttp.ClientSession] = None  # Persistent HTTP session
         self._started: bool = False
@@ -99,7 +97,8 @@ class GroupService:
         logger.info(
             "group_service_initialized",
             auth_api_url=self.auth_api_url,
-            cache_ttl=self.cache_ttl_details
+            cache_ttl=self.cache_ttl_details,
+            auth_method="direct_http_no_oauth"
         )
 
     async def start(self) -> None:
@@ -168,7 +167,8 @@ class GroupService:
     async def get_group_details(
         self,
         group_id: str,
-        expected_org_id: str
+        expected_org_id: str,
+        user_token: Optional[str] = None
     ) -> Optional[GroupDetails]:
         """
         Get group details with org_id validation.
@@ -221,7 +221,7 @@ class GroupService:
         )
 
         try:
-            group = await self._fetch_from_auth_api(group_id)
+            group = await self._fetch_from_auth_api(group_id, user_token)
 
             if not group:
                 logger.warning(
@@ -299,9 +299,9 @@ class GroupService:
 
         return self._session
 
-    async def _fetch_from_auth_api(self, group_id: str) -> Optional[GroupDetails]:
+    async def _fetch_from_auth_api(self, group_id: str, user_token: Optional[str] = None) -> Optional[GroupDetails]:
         """
-        Fetch group details from Auth-API using aiohttp.
+        Fetch group details from Auth-API using user JWT token.
 
         Calls Auth-API endpoints:
         - GET /api/auth/groups/{group_id} - Basic group info (name, description, org_id)
@@ -314,17 +314,19 @@ class GroupService:
         Raises:
             aiohttp.ClientError: If Auth-API returns error (500, timeout, etc.)
         """
-        # Get service access token (auto-refreshes if needed)
-        token = await self.token_manager.get_token()
-
         session = self._get_session()
-        headers = {"Authorization": f"Bearer {token}"}
+
+        # Use user JWT token for authentication
+        headers = {}
+        if user_token:
+            headers["Authorization"] = f"Bearer {user_token}"
 
         # Fetch group basic info
         logger.debug(
             "fetching_group_from_auth_api",
             group_id=group_id,
-            endpoint=f"{self.auth_api_url}/api/auth/groups/{group_id}"
+            endpoint=f"{self.auth_api_url}/api/auth/groups/{group_id}",
+            has_token=bool(user_token)
         )
 
         async with session.get(

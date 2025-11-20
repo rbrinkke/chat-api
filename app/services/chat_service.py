@@ -51,7 +51,8 @@ class ChatService:
         group_id: str,
         org_id: str,
         sender_id: str,
-        content: str
+        content: str,
+        user_token: str = None
     ) -> Message:
         """
         Create a new message in a group.
@@ -79,7 +80,7 @@ class ChatService:
 
         try:
             # Verify user has access to the group AND org_id matches
-            group = await self._verify_group_access(group_id, org_id, sender_id)
+            group = await self._verify_group_access(group_id, org_id, sender_id, user_token)
 
             # Create message with org_id and denormalized group_name
             message = Message(
@@ -154,7 +155,8 @@ class ChatService:
         org_id: str,
         user_id: str,
         page: int = 1,
-        page_size: int = 50
+        page_size: int = 50,
+        user_token: str = None
     ) -> Tuple[List[Message], int]:
         """
         Get paginated messages for a group with org_id filtering.
@@ -185,7 +187,7 @@ class ChatService:
             ForbiddenError: User not authorized or org_id mismatch
         """
         # Verify user has access to the group AND org_id matches
-        await self._verify_group_access(group_id, org_id, user_id)
+        await self._verify_group_access(group_id, org_id, user_id, user_token)
 
         # Calculate skip
         skip = (page - 1) * page_size
@@ -248,21 +250,25 @@ class ChatService:
     async def update_message(
         self,
         message_id: str,
+        group_id: str,
         org_id: str,
         user_id: str,
-        new_content: str
+        new_content: str,
+        user_token: str = None
     ) -> Message:
         """
         Update a message (only by sender).
 
         Security Flow:
         1. Fetch message from MongoDB
-        2. Validate message.org_id == org_id (multi-tenant security)
-        3. Validate message.sender_id == user_id (ownership)
-        4. Update content and broadcast
+        2. Validate message.group_id == group_id (URL consistency)
+        3. Validate message.org_id == org_id (multi-tenant security)
+        4. Validate message.sender_id == user_id (ownership)
+        5. Update content and broadcast
 
         Args:
             message_id: Message ObjectId string
+            group_id: Group UUID from URL path
             org_id: Organization UUID from user's JWT token
             user_id: User UUID from JWT token
             new_content: Updated message content (already sanitized)
@@ -271,7 +277,7 @@ class ChatService:
             Updated Message object
 
         Raises:
-            NotFoundError: Message not found
+            NotFoundError: Message not found or group_id mismatch
             ForbiddenError: Not message sender or org_id mismatch
         """
         start_time = time.time()
@@ -280,6 +286,19 @@ class ChatService:
             # Get message - Beanie auto-converts string to ObjectId
             message = await Message.get(message_id)
             if not message:
+                raise NotFoundError("Message not found")
+
+            # CRITICAL: Validate group_id matches URL (prevents information leakage)
+            # Return 404 (not 400/403) to avoid revealing message existence in other groups
+            if message.group_id != group_id:
+                logger.warning(
+                    "message_group_mismatch",
+                    message_id=message_id,
+                    url_group_id=group_id,
+                    message_group_id=message.group_id,
+                    user_id=user_id,
+                    reason="group_id_mismatch_returns_404"
+                )
                 raise NotFoundError("Message not found")
 
             # CRITICAL: Validate org_id matches (multi-tenant security)
@@ -360,25 +379,32 @@ class ChatService:
     async def delete_message(
         self,
         message_id: str,
+        group_id: str,
         org_id: str,
-        user_id: str
+        user_id: str,
+        user_token: str = None,
+        is_admin: bool = False
     ):
         """
-        Soft delete a message (only by sender).
+        Soft delete a message (by sender or admin).
 
         Security Flow:
         1. Fetch message from MongoDB
-        2. Validate message.org_id == org_id (multi-tenant security)
-        3. Validate message.sender_id == user_id (ownership)
-        4. Soft delete and broadcast
+        2. Validate message.group_id == group_id (URL consistency)
+        3. Validate message.org_id == org_id (multi-tenant security)
+        4. Validate message.sender_id == user_id (ownership) OR is_admin=True
+        5. Soft delete and broadcast
 
         Args:
             message_id: Message ObjectId string
+            group_id: Group UUID from URL path
             org_id: Organization UUID from user's JWT token
             user_id: User UUID from JWT token
+            user_token: Raw JWT token (optional)
+            is_admin: True if user has chat:admin permission (bypasses ownership check)
 
         Raises:
-            NotFoundError: Message not found
+            NotFoundError: Message not found or group_id mismatch
             ForbiddenError: Not message sender or org_id mismatch
         """
         start_time = time.time()
@@ -387,6 +413,19 @@ class ChatService:
             # Get message - Beanie auto-converts string to ObjectId
             message = await Message.get(message_id)
             if not message:
+                raise NotFoundError("Message not found")
+
+            # CRITICAL: Validate group_id matches URL (prevents information leakage)
+            # Return 404 (not 400/403) to avoid revealing message existence in other groups
+            if message.group_id != group_id:
+                logger.warning(
+                    "message_group_mismatch",
+                    message_id=message_id,
+                    url_group_id=group_id,
+                    message_group_id=message.group_id,
+                    user_id=user_id,
+                    reason="group_id_mismatch_returns_404"
+                )
                 raise NotFoundError("Message not found")
 
             # CRITICAL: Validate org_id matches (multi-tenant security)
@@ -401,8 +440,15 @@ class ChatService:
                 )
                 raise ForbiddenError("Not authorized to delete this message")
 
-            # Verify sender ownership
-            if message.sender_id != user_id:
+            # Verify sender ownership OR admin permission
+            if not is_admin and message.sender_id != user_id:
+                logger.warning(
+                    "non_admin_delete_attempt_blocked",
+                    message_id=message_id,
+                    message_sender_id=message.sender_id,
+                    requesting_user_id=user_id,
+                    reason="not_owner_and_not_admin"
+                )
                 raise ForbiddenError("You can only delete your own messages")
 
             # Soft delete
@@ -456,7 +502,8 @@ class ChatService:
         self,
         group_id: str,
         expected_org_id: str,
-        user_id: str
+        user_id: str,
+        user_token: str = None
     ) -> GroupDetails:
         """
         Verify user has access to group AND group belongs to user's organization.
@@ -489,7 +536,8 @@ class ChatService:
         # 3. Returns None if unauthorized
         group = await self.group_service.get_group_details(
             group_id=group_id,
-            expected_org_id=expected_org_id
+            expected_org_id=expected_org_id,
+            user_token=user_token
         )
 
         if not group:

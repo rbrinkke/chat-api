@@ -343,3 +343,194 @@ def get_optional_token(
     except HTTPException:
         # Invalid token - treat as anonymous
         return None
+
+
+# ============================================================================
+# Runtime Permission Checks (RBAC via Auth API)
+# ============================================================================
+
+def require_permission(permission: str):
+    """
+    Require runtime permission check via Auth API.
+
+    This replaces scope-based authorization with runtime RBAC checks.
+    The JWT token contains ONLY user_id and org_id (NO scopes).
+
+    Flow:
+    1. Validate JWT token (signature + expiration)
+    2. Call Auth API to check permission (via AuthorizationService)
+    3. Auth API checks database via sp_user_has_permission()
+    4. Allow or deny based on response
+
+    Usage:
+        @app.post("/api/v1/messages")
+        async def create_message(token: OAuthToken = Depends(require_permission("chat:write"))):
+            return {"status": "created"}
+
+    Args:
+        permission: Permission string in format "resource:action" (e.g., "chat:read", "chat:write")
+
+    Returns:
+        OAuthToken with validated user_id and org_id
+
+    Raises:
+        HTTPException: 401 if token invalid, 403 if permission denied
+    """
+    async def permission_checker(token: OAuthToken = Depends(validate_oauth_token)) -> OAuthToken:
+        from app.core.authorization import get_authorization_service
+
+        # Get authorization service
+        auth_service = await get_authorization_service()
+
+        try:
+            # Check permission via Auth API
+            allowed = await auth_service.check_permission(
+                org_id=token.org_id,
+                user_id=token.user_id,
+                permission=permission
+            )
+
+            if not allowed:
+                logger.warning(
+                    "permission_denied",
+                    user_id=token.user_id,
+                    org_id=token.org_id,
+                    permission=permission,
+                    reason="Auth API denied permission"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Permission denied: '{permission}' required"
+                )
+
+            logger.info(
+                "permission_granted",
+                user_id=token.user_id,
+                org_id=token.org_id,
+                permission=permission
+            )
+
+            return token
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(
+                "permission_check_failed",
+                user_id=token.user_id,
+                org_id=token.org_id,
+                permission=permission,
+                error=str(e)
+            )
+            # Fail-closed: deny access on errors
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authorization service unavailable"
+            )
+
+    return permission_checker
+
+
+def require_permission_hierarchy(base_permission: str, admin_permission: str = "chat:admin"):
+    """
+    Require permission with hierarchy support for DELETE operations.
+
+    Allows EITHER:
+    - User has base_permission AND is owner (sender_id == user_id)
+    - User has admin_permission (can delete ANY message)
+
+    This is used for DELETE endpoints where:
+    - Regular users (chat:write) can delete their own messages
+    - Admins (chat:admin) can delete any message
+
+    Usage:
+        @app.delete("/api/v1/messages/{message_id}")
+        async def delete_message(
+            message_id: str,
+            token: OAuthToken = Depends(require_permission_hierarchy("chat:write", "chat:admin"))
+        ):
+            # Service layer checks if user is owner OR has chat:admin
+            return {"status": "deleted"}
+
+    Args:
+        base_permission: Base permission (e.g., "chat:write")
+        admin_permission: Admin permission that bypasses ownership (e.g., "chat:admin")
+
+    Returns:
+        OAuthToken with validated user_id and org_id
+
+    Raises:
+        HTTPException: 401 if token invalid, 403 if both permissions denied
+    """
+    async def permission_checker(token: OAuthToken = Depends(validate_oauth_token)) -> OAuthToken:
+        from app.core.authorization import get_authorization_service
+
+        # Get authorization service
+        auth_service = await get_authorization_service()
+
+        try:
+            # Check admin permission first (allows deleting ANY message)
+            admin_allowed = await auth_service.check_permission(
+                org_id=token.org_id,
+                user_id=token.user_id,
+                permission=admin_permission
+            )
+
+            if admin_allowed:
+                logger.info(
+                    "admin_permission_granted",
+                    user_id=token.user_id,
+                    org_id=token.org_id,
+                    permission=admin_permission
+                )
+                return token
+
+            # Check base permission (allows deleting OWN messages)
+            base_allowed = await auth_service.check_permission(
+                org_id=token.org_id,
+                user_id=token.user_id,
+                permission=base_permission
+            )
+
+            if base_allowed:
+                logger.info(
+                    "base_permission_granted",
+                    user_id=token.user_id,
+                    org_id=token.org_id,
+                    permission=base_permission,
+                    note="Ownership check required in service layer"
+                )
+                return token
+
+            # Neither permission granted
+            logger.warning(
+                "permission_hierarchy_denied",
+                user_id=token.user_id,
+                org_id=token.org_id,
+                base_permission=base_permission,
+                admin_permission=admin_permission,
+                reason="Neither base nor admin permission granted"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied: '{base_permission}' or '{admin_permission}' required"
+            )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(
+                "permission_hierarchy_check_failed",
+                user_id=token.user_id,
+                org_id=token.org_id,
+                base_permission=base_permission,
+                admin_permission=admin_permission,
+                error=str(e)
+            )
+            # Fail-closed: deny access on errors
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authorization service unavailable"
+            )
+
+    return permission_checker

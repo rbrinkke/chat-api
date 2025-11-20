@@ -4,35 +4,152 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Real-time chat API built with **FastAPI**, **MongoDB/Beanie ODM**, and **WebSocket** support. Features JWT authentication (shared secret with auth-api), group-based authorization, and production-grade structured logging with correlation IDs.
+**Chat API** is a real-time messaging service built with **FastAPI**, **MongoDB/Beanie ODM**, and **WebSocket** support. It integrates with Auth API for **runtime permission validation** using a group-based RBAC system.
 
-## Quick User Creation (Testing)
+### Key Features
 
-A utility script is available to quickly create and activate test users:
+- **Real-time messaging** via WebSocket
+- **Runtime permission checks** via Auth API (NOT token-based scopes)
+- **Group-based RBAC** - permissions granted through group membership
+- **Multi-tenant isolation** - strict org_id validation
+- **MongoDB storage** with Beanie ODM
+- **Structured logging** with correlation IDs
 
-```bash
-# Create user with random email/password and get JWT token
-source ./utils/create_user.sh
+### Architecture
 
-# Script exports:
-# - $USER_EMAIL      (generated email)
-# - $USER_PASSWORD   (generated password)
-# - $USER_ID         (UUID from database)
-# - $JWT_TOKEN       (access token)
-# - $REFRESH_TOKEN   (refresh token)
-
-# Use in API requests:
-curl -H "Authorization: Bearer $JWT_TOKEN" http://localhost:8001/api/chat/groups
+```
+┌─────────────┐
+│   Client    │
+└──────┬──────┘
+       │ JWT Token (user_id + org_id)
+       │ NO permissions in token!
+       ▼
+┌─────────────────────────────────┐
+│        Chat API (FastAPI)       │
+│  1. Validate JWT                │
+│  2. Check permission via        │
+│     Auth API (runtime)          │
+│  3. Execute business logic      │
+└─────────┬───────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────┐
+│     Auth API                    │
+│  POST /api/v1/authorization/    │
+│       check                     │
+│  • X-Service-Token auth         │
+│  • Checks database via          │
+│    sp_user_has_permission()     │
+└─────────────────────────────────┘
 ```
 
-**What it does:**
-1. Generates random email and password
-2. Registers user via Auth API
-3. Activates user in database (sets is_verified=true)
-4. Logs in and retrieves JWT tokens
-5. Exports all credentials as environment variables
+## Critical Concept: Runtime Permission Validation
 
-See `utils/create_user.sh` for implementation.
+**⚠️ BELANGRIJK**: Chat API gebruikt GEEN OAuth scopes in JWT tokens!
+
+### Hoe het NIET werkt
+```json
+❌ JWT Token bevat GEEN permissions:
+{
+  "sub": "user-id",
+  "org_id": "org-id",
+  "scope": "chat:read chat:write"  // ← Dit bestaat NIET!
+}
+```
+
+### Hoe het WEL werkt
+```json
+✅ JWT Token bevat ALLEEN identifiers:
+{
+  "sub": "user-id",
+  "org_id": "org-id",
+  "type": "access"
+}
+```
+
+Bij elke request:
+1. Chat API valideert JWT token (signature + expiration)
+2. Chat API vraagt Auth API: "Heeft user X permission Y?"
+3. Auth API checkt database via stored procedure
+4. Auth API antwoordt: `{"allowed": true/false}`
+5. Chat API accepteert of weigert request
+
+**Zie `AUTHORIZATION.md` voor volledige flow documentatie.**
+
+## Quick Start
+
+### 1. Start Infrastructure
+
+```bash
+# Start PostgreSQL, Redis, MongoDB
+./scripts/start-infra.sh
+
+# Verify services
+./scripts/status.sh
+```
+
+### 2. Configure Environment
+
+Create `.env` file:
+
+```bash
+# MongoDB
+MONGODB_URI=mongodb://mongodb:27017
+MONGODB_DB=chat_db
+
+# JWT Configuration (MUST match auth-api)
+JWT_SECRET_KEY=your-jwt-secret-min-32-chars-change-in-production
+
+# Auth API Integration (CRITICAL for permission checks)
+AUTH_API_URL=http://auth-api:8000
+SERVICE_AUTH_TOKEN=your-service-token-change-in-production
+
+# Server
+HOST=0.0.0.0
+PORT=8001
+ENVIRONMENT=development
+
+# Logging
+LOG_LEVEL=INFO
+LOG_JSON_FORMAT=false
+```
+
+### 3. Start Service
+
+```bash
+# Via Docker Compose
+docker compose up -d
+
+# Or locally
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8001
+```
+
+### 4. Load Test Data
+
+```bash
+# Load RBAC test data into Auth API database
+docker exec -i activity-postgres-db psql -U postgres -d activitydb < test_rbac_setup.sql
+
+# Verify test setup
+# See TEST_DATA_README.md for details
+```
+
+### 5. Test Permission Checks
+
+```bash
+# Test via Auth API authorization endpoint
+curl -X POST http://localhost:8000/api/v1/authorization/check \
+  -H "X-Service-Token: your-service-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org_id": "99999999-9999-9999-9999-999999999999",
+    "user_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+    "permission": "chat:read"
+  }'
+
+# Expected: {"allowed":true,"groups":["vrienden"],"reason":null}
+```
 
 ## Common Commands
 
@@ -42,19 +159,28 @@ See `utils/create_user.sh` for implementation.
 # Install dependencies
 pip install -r requirements.txt
 
-# Start MongoDB via Docker
+# Start MongoDB
 docker run -d -p 27017:27017 --name mongodb mongo:latest
 
-# Start API locally (development with auto-reload)
+# Start API with auto-reload
 uvicorn app.main:app --reload --port 8001
 
-# Or via Python module
-python -m app.main
+# Enable debug logging
+export LOG_LEVEL=DEBUG
+uvicorn app.main:app --reload
+```
 
-# Start full stack with Docker Compose
-docker-compose up -d
+### Docker Operations
 
-# View logs with correlation IDs
+```bash
+# Build and start
+docker compose up -d
+
+# Rebuild after code changes (CRITICAL!)
+docker compose build chat-api --no-cache
+docker compose restart chat-api
+
+# View logs
 docker logs -f chat-api
 
 # Filter logs by level
@@ -70,444 +196,409 @@ mongosh
 # Switch to database
 use chat_db
 
-# Create test group
-db.groups.insertOne({
-  name: "General",
-  description: "Test group",
-  authorized_user_ids: ["test-user-123"],
-  created_at: new Date()
-})
-
-# View groups
+# View all groups
 db.groups.find().pretty()
 
 # View messages
 db.messages.find().limit(10).pretty()
+
+# Count messages per group
+db.messages.aggregate([
+  { $match: { is_deleted: false } },
+  { $group: { _id: "$group_id", count: { $sum: 1 } } },
+  { $sort: { count: -1 } }
+])
 ```
 
-### Debugging
+### Testing
 
 ```bash
-# Enable debug logging
-export LOG_LEVEL=DEBUG
-uvicorn app.main:app --reload
+# Run all tests
+pytest
 
-# Track specific request via correlation ID
-docker logs chat-api | grep "correlation_id.*abc-123"
+# Run with coverage
+pytest --cov=app --cov-report=html
 
-# Find slow requests (>1000ms)
-docker logs chat-api | grep '"slow_request":true'
+# Run specific test file
+pytest tests/test_authorization.py -v
 
-# Open real-time dashboard for monitoring
-open http://localhost:8001/dashboard
-
-# Get dashboard metrics as JSON
-curl http://localhost:8001/dashboard/api/data | jq '.performance'
+# Test with Auth API integration
+pytest tests/test_integration.py -v
 ```
 
-## Architecture Overview
+## Permission Levels
 
-### Backend Structure
+### chat:read
+- View messages in authorized groups
+- WebSocket connection for real-time updates
 
+### chat:write
+- Create messages
+- Edit own messages
+- Delete own messages (soft delete)
+- Includes all chat:read rights
+
+### chat:admin
+- Delete ANY message (including others)
+- Moderate users
+- Group management
+- Includes all chat:write rights
+
+**See `AUTHORIZATION.md` for complete permission documentation.**
+
+## Test Users
+
+Quick reference for test data (loaded via `test_rbac_setup.sql`):
+
+| User | Email | Groups | Permissions |
+|------|-------|--------|-------------|
+| Admin | chattest-admin@example.com | vrienden | chat:read, chat:write |
+| User1 | chattest-user1@example.com | vrienden | chat:read, chat:write |
+| User2 | chattest-user2@example.com | observers | NONE |
+| Moderator | chattest-moderator@example.com | moderators | chat:admin |
+
+**Organization ID**: `99999999-9999-9999-9999-999999999999`
+
+**See `TEST_DATA_README.md` for complete test data documentation.**
+
+## Critical Configuration
+
+### JWT Secret Matching
+
+**⚠️ CRITICAL**: JWT_SECRET_KEY MUST match between auth-api and chat-api!
+
+```bash
+# Check both secrets
+cat /mnt/d/activity/auth-api/.env | grep JWT_SECRET_KEY
+cat /mnt/d/activity/chat-api/.env | grep JWT_SECRET_KEY
+
+# Must be IDENTICAL!
 ```
-app/
-├── main.py              # FastAPI app, middleware setup, lifespan management
-├── config.py            # Pydantic Settings (env vars, JWT_SECRET, MongoDB URL)
-├── core/
-│   ├── logging_config.py   # Structlog setup, correlation IDs, performance logging
-│   └── exceptions.py       # NotFoundError, ForbiddenError
-├── db/
-│   └── mongodb.py          # MongoDB connection, Beanie initialization
-├── middleware/
-│   ├── auth.py             # JWT token validation (get_current_user)
-│   ├── correlation.py      # Correlation ID injection
-│   └── access_log.py       # Request/response logging with metrics
-├── models/                 # Beanie ODM documents
-│   ├── group.py            # Group(name, description, authorized_user_ids)
-│   └── message.py          # Message(group_id, sender_id, content, is_deleted)
-├── schemas/                # Pydantic request/response models
-│   ├── group.py
-│   └── message.py
-├── services/               # Business logic
-│   ├── chat_service.py        # CRUD + authorization checks
-│   ├── connection_manager.py  # WebSocket connection pooling
-│   └── dashboard_service.py   # Metrics collection & dashboard data aggregation
-└── routes/                 # API endpoints
-    ├── groups.py           # GET /api/chat/groups, GET /api/chat/groups/{id}
-    ├── messages.py         # POST/PUT/DELETE /api/chat/groups/{id}/messages
-    ├── websocket.py        # WS /api/chat/ws/{group_id}
-    └── dashboard.py        # GET /dashboard (monitoring interface)
+
+If secrets don't match:
+- JWT validation will ALWAYS fail
+- All requests will return 401 Unauthorized
+- Error: "Invalid token signature"
+
+### Service Token Configuration
+
+**⚠️ CRITICAL**: SERVICE_AUTH_TOKEN required for Auth API communication!
+
+```bash
+# Generate strong service token
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+# Set in .env
+SERVICE_AUTH_TOKEN=<generated-token>
 ```
 
-### Key Design Patterns
+Chat API uses this token to authenticate as a service when calling Auth API's `/api/v1/authorization/check` endpoint.
 
-**Authorization Model**: Group-based access control
-- Groups store `authorized_user_ids: List[str]` (UUIDs from auth-api)
-- `ChatService._get_group_and_verify_access()` enforces authorization on every operation
-- Users can only see/interact with groups they're authorized for
+## Development Patterns
 
-**WebSocket Broadcasting**: In-memory connection pooling
-- `ConnectionManager` maintains `Dict[group_id, Set[WebSocket]]`
-- Message operations (create/update/delete) trigger broadcasts via `manager.broadcast_to_group()`
-- Automatic cleanup of disconnected clients
+### Always Rebuild After Code Changes
 
-**Soft Deletes**: Messages are never hard-deleted
-- `Message.is_deleted` flag for soft deletion
-- Queries filter `Message.is_deleted == False`
-- Preserves message history for audit/recovery
+**CRITICAL**: `docker compose restart` does NOT pick up code changes!
 
-**Middleware Order** (executes in reverse registration order):
-1. `RequestContextMiddleware` - Correlation ID injection (executes last)
-2. `AccessLogMiddleware` - Request/response logging with performance metrics
-3. `CORSMiddleware` - CORS headers (executes first)
+```bash
+# Wrong (uses old cached image)
+docker compose restart chat-api
 
-## Authentication Flow
+# Right (rebuilds with new code)
+docker compose build chat-api --no-cache
+docker compose restart chat-api
+```
 
-**Critical**: `JWT_SECRET` in `.env` MUST match auth-api's secret. This API validates tokens issued by auth-api.
+Rebuild required after:
+- Python code changes
+- Dependency updates (requirements.txt)
+- Environment variable changes
+- Dockerfile modifications
+
+### Debug Permission Issues
+
+If permissions are denied unexpectedly:
+
+```bash
+# 1. Check Auth API is accessible
+docker exec -it chat-api curl http://auth-api:8000/health
+
+# 2. Test permission check directly
+curl -X POST http://localhost:8000/api/v1/authorization/check \
+  -H "X-Service-Token: $SERVICE_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org_id": "99999999-9999-9999-9999-999999999999",
+    "user_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+    "permission": "chat:read"
+  }'
+
+# 3. Check Chat API logs
+docker logs chat-api | grep permission_check
+
+# 4. Check Auth API logs
+docker logs auth-api | grep authorization
+
+# 5. Test stored procedure directly
+docker exec -i activity-postgres-db psql -U postgres -d activitydb -c "
+SELECT activity.sp_user_has_permission(
+    'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'::UUID,
+    '99999999-9999-9999-9999-999999999999'::UUID,
+    'chat', 'read'
+);
+"
+```
+
+### Structured Logging
+
+All log messages use structured format with correlation IDs:
 
 ```python
-# Token validation happens in middleware/auth.py:get_current_user()
-# Extracts user_id from JWT "sub" claim
-# All protected routes use: Depends(get_current_user)
-```
-
-**WebSocket Authentication**:
-```
-ws://localhost:8001/api/chat/ws/{group_id}?token=JWT_TOKEN
-```
-
-Token passed as query parameter, validated on connection, user_id extracted for authorization checks.
-
-## API Endpoints
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/health` | No | Health check |
-| GET | `/dashboard` | No | Technical monitoring dashboard (HTML) |
-| GET | `/dashboard/api/data` | No | Dashboard metrics (JSON) |
-| GET | `/api/chat/groups` | JWT | Get user's groups |
-| GET | `/api/chat/groups/{id}` | JWT | Get specific group |
-| GET | `/api/chat/groups/{id}/messages` | JWT | Get paginated messages (50/page) |
-| POST | `/api/chat/groups/{id}/messages` | JWT | Create message + broadcast |
-| PUT | `/api/chat/messages/{id}` | JWT | Update own message + broadcast |
-| DELETE | `/api/chat/messages/{id}` | JWT | Soft delete own message + broadcast |
-| WS | `/api/chat/ws/{group_id}?token=JWT` | JWT | Real-time chat connection |
-
-## WebSocket Message Types
-
-**Client → Server**:
-```json
-{"type": "ping"}
-{"type": "typing"}
-```
-
-**Server → Client**:
-```json
-{"type": "connected", "message": "Connected to group {id}", "user_id": "..."}
-{"type": "new_message", "message": {...}}
-{"type": "message_updated", "message": {...}}
-{"type": "message_deleted", "message_id": "..."}
-{"type": "user_joined", "user_id": "...", "connection_count": 3}
-{"type": "user_left", "user_id": "...", "connection_count": 2}
-```
-
-## Structured Logging
-
-Production-grade logging with `structlog`:
-
-**Features**:
-- JSON output in production (`ENVIRONMENT=production`)
-- Correlation IDs for request tracking (`X-Correlation-ID` header)
-- Automatic performance metrics (`duration_ms`, `slow_request` flags)
-- Security redaction (passwords/tokens censored)
-- Third-party library filtering (SQLAlchemy logs suppressed)
-
-**Usage in Code**:
-```python
-from app.core.logging_config import get_logger, PerformanceLogger
+from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Structured logging
-logger.info("user_action", user_id="123", action="send_message")
+# Log permission check
+logger.info(
+    "permission_check",
+    user_id=user_id,
+    org_id=org_id,
+    permission="chat:read",
+    allowed=True
+)
 
-# Performance timing
-with PerformanceLogger("db_query", logger, query_type="select"):
-    result = await db.execute(query)
+# Log permission denial
+logger.warning(
+    "permission_denied",
+    user_id=user_id,
+    org_id=org_id,
+    permission="chat:write",
+    reason="User not in any group with permission"
+)
 ```
 
-**Log Levels**:
-- `DEBUG`: All operations, function calls, variables (development only)
-- `INFO`: Important events, requests, user actions (production default)
-- `WARNING`: Slow queries, deprecated features
-- `ERROR`: Failed operations, exceptions
-
-**Performance Alerts**:
-- `slow_request: true` when `duration_ms > 1000`
-- `very_slow_request: true` when `duration_ms > 5000`
-
-See `DEBUGGING_GUIDE.md` for complete debugging scenarios and log aggregation queries.
-
-## Dashboard & Monitoring
-
-**Real-time technical monitoring interface for troubleshooting and operations.**
-
-### Accessing the Dashboard
-
-```bash
-# Start the API
-uvicorn app.main:app --reload --port 8001
-
-# Open dashboard in browser
-http://localhost:8001/dashboard
-
-# Or get JSON metrics via API
-curl http://localhost:8001/dashboard/api/data | jq
-```
-
-### Dashboard Features
-
-The dashboard provides comprehensive real-time metrics organized in an information-dense, terminal-style interface:
-
-**Status Bar** (top of dashboard):
-- API status, MongoDB health, uptime
-- Active WebSocket connections count
-- Total requests processed, error rate %
-- Average response time (with warnings for slow performance)
-
-**System Metrics**:
-- Process memory usage (MB and %)
-- CPU utilization
-- System memory availability
-- Automatic resource monitoring via `psutil`
-
-**Database Statistics**:
-- Total groups and messages
-- Active vs deleted messages (soft delete tracking)
-- Message deletion rate percentage
-- Average messages per group
-- 24-hour growth metrics (new groups/messages)
-- **Top 10 Most Active Groups** with message counts and last activity
-
-**WebSocket Monitoring**:
-- Total active connections across all groups
-- Per-group connection breakdown (sorted by activity)
-- Recent connection/disconnection events (last 20)
-- User join/leave tracking with timestamps
-
-**Performance Metrics**:
-- Requests per minute (throughput)
-- Average response time across all endpoints
-- Slow request count (>1s) with warnings
-- Very slow request count (>5s) with alerts
-- Total error count and error rate %
-
-**Endpoint Analytics**:
-- Per-endpoint request counts
-- Error counts and error rates per endpoint
-- Average response time per endpoint
-- Sortable table showing busiest endpoints
-
-**Recent Activity Logs**:
-- **Slow Requests** (last 10): Shows endpoint, duration, correlation ID
-  - Color-coded: Orange for >1s, Red for >5s
-- **Recent Errors** (last 20): Full error details with status codes
-- **Recent Requests** (last 20): Latest successful requests
-- **WebSocket Events** (last 20): Connection timeline with user IDs
-
-**Troubleshooting Features**:
-- **Correlation ID Tracking**: Every request/error shows correlation ID
-  - Copy correlation ID and search logs: `grep "correlation_id.*abc-123"`
-- **Automatic Refresh**: Dashboard updates every 10 seconds
-- **Visual Alerts**: Color-coded warnings (green=ok, orange=warning, red=error)
-- **Performance Thresholds**: Automatic highlighting of slow/failing operations
-
-### Architecture
-
-**Metrics Collection** (`app/services/dashboard_service.py`):
-- `MetricsCollector` singleton tracks all metrics in-memory
-- Thread-safe using `deque` for concurrent access
-- Automatic memory management (keeps last 50-100 items per metric)
-- Zero database overhead - all metrics stored in memory
-
-**Automatic Integration**:
-- `AccessLogMiddleware` records every HTTP request
-- WebSocket routes record connection events
-- No manual instrumentation needed in route handlers
-
-**Data Aggregation** (`DashboardService`):
-- Collects real-time data from MongoDB, WebSocket manager, metrics collector
-- Performs MongoDB aggregations for top active groups
-- Calculates percentiles, averages, and growth metrics
-- Returns comprehensive JSON payload for dashboard
-
-**Performance Impact**:
-- Minimal overhead (~1-2ms per request)
-- Graceful degradation if metrics unavailable
-- No blocking operations
-- Efficient deque-based storage
-
-### Use Cases
-
-**Development**:
-- Monitor request patterns during testing
-- Track WebSocket connections in real-time
-- Identify slow endpoints immediately
-- Debug with correlation IDs
-
-**Production Monitoring**:
-- Quick health check for operations team
-- Identify performance degradation early
-- Track user activity and popular groups
-- Monitor resource usage and capacity
-
-**Troubleshooting**:
-- Correlation ID lookup for request tracing
-- Slow request identification
-- Error pattern analysis
-- WebSocket connection debugging
-
-### No Authentication Required
-
-The dashboard is **intentionally unauthenticated** for internal monitoring. In production:
-- Deploy dashboard on internal network only
-- Use firewall/network policies to restrict access
-- Or add authentication middleware if exposed publicly
-
-See `DASHBOARD.md` for detailed technical documentation including metrics definitions, aggregation logic, and integration guides.
-
-## Configuration
-
-All settings in `.env` or environment variables (see `app/config.py`):
-
-**Critical Settings**:
-- `JWT_SECRET`: **MUST match auth-api** (default: "your-secret-key-change-in-production")
-- `MONGODB_URL`: MongoDB connection string (default: "mongodb://localhost:27017")
-- `DATABASE_NAME`: Database name (default: "chat_db")
-
-**API Settings**:
-- `PORT`: API port (default: 8001)
-- `API_PREFIX`: Route prefix (default: "/api/chat")
-
-**Logging Settings**:
-- `LOG_LEVEL`: DEBUG | INFO | WARNING | ERROR | CRITICAL (default: "INFO")
-- `LOG_JSON_FORMAT`: `true` for production, `false` for development (default: false)
-- `LOG_SQL_QUERIES`: Enable MongoDB query logging - very verbose! (default: false)
-
-**CORS**:
-- `CORS_ORIGINS`: Allowed origins (default: `["http://localhost:3000", "http://localhost:8000"]`)
-
-## Integration with Auth-API
-
-1. Ensure `JWT_SECRET` matches between both APIs
-2. Use user UUIDs from auth-api in `Group.authorized_user_ids`
-3. This API validates tokens issued by auth-api but doesn't issue tokens itself
-
-## Database Models
-
-**Group Document**:
-```python
-{
-  "_id": ObjectId,
-  "name": str,  # max 100 chars
-  "description": str,  # max 500 chars
-  "authorized_user_ids": List[str],  # User UUIDs from auth-api
-  "created_at": datetime
-}
-```
-
-**Message Document**:
-```python
-{
-  "_id": ObjectId,
-  "group_id": str,  # References Group._id
-  "sender_id": str,  # User UUID from auth-api
-  "content": str,  # max 10,000 chars
-  "created_at": datetime,
-  "updated_at": datetime,
-  "is_deleted": bool  # Soft delete flag
-}
-```
-
-**Indexes**:
-- Groups: `name`, `authorized_user_ids`
-- Messages: `group_id`, `sender_id`, compound index on `(group_id, created_at)` for pagination
+Correlation ID automatically injected via middleware for request tracing.
 
 ## Troubleshooting
 
-**MongoDB connection failed**:
+### "Invalid token" on every request
+
+**Cause**: JWT_SECRET_KEY mismatch between auth-api and chat-api
+
+**Solution**:
 ```bash
-docker ps  # Check if MongoDB is running
-mongosh mongodb://localhost:27017  # Test connection
+# Verify both secrets match
+diff <(cat ../auth-api/.env | grep JWT_SECRET_KEY) \
+     <(cat .env | grep JWT_SECRET_KEY)
+
+# Should show NO differences
 ```
 
-**JWT validation fails**:
-- Verify `JWT_SECRET` matches auth-api
-- Check token hasn't expired
-- Ensure token format: `Authorization: Bearer <token>`
+### "Service authentication failed"
 
-**Import errors**:
+**Cause**: X-Service-Token doesn't match Auth API's SERVICE_AUTH_TOKEN
+
+**Solution**:
 ```bash
-pwd  # Must be in /path/to/chat-api (where app/ folder is)
-which python  # Should be in venv if using virtual environment
+# Check Auth API service token
+cat ../auth-api/.env | grep SERVICE_AUTH_TOKEN
+
+# Update Chat API .env to match
+SERVICE_AUTH_TOKEN=<same-value-as-auth-api>
+
+# Restart service
+docker compose restart chat-api
 ```
 
-**Port already in use**:
+### "Permission denied" but user is in correct group
+
+**Debug steps**:
 ```bash
-lsof -ti:8001 | xargs kill  # Kill process on port 8001
-# Or change PORT in .env
+# 1. Verify user is in organization
+docker exec -i activity-postgres-db psql -U postgres -d activitydb -c "
+SELECT * FROM activity.organization_members
+WHERE user_id = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+  AND organization_id = '99999999-9999-9999-9999-999999999999';
+"
+
+# 2. Verify user is in group
+docker exec -i activity-postgres-db psql -U postgres -d activitydb -c "
+SELECT g.name, ug.added_at
+FROM activity.user_groups ug
+JOIN activity.groups g ON ug.group_id = g.id
+WHERE ug.user_id = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+"
+
+# 3. Verify group has permission
+docker exec -i activity-postgres-db psql -U postgres -d activitydb -c "
+SELECT p.resource, p.action
+FROM activity.group_permissions gp
+JOIN activity.permissions p ON gp.permission_id = p.id
+WHERE gp.group_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+"
 ```
 
-**WebSocket disconnects**:
-- Check JWT token validity
-- Verify user is in `authorized_user_ids` for the group
-- Check `LOG_LEVEL=DEBUG` for WebSocket-specific errors
+### Auth API connection timeout
 
-## Testing Strategy
+**Cause**: Chat API container can't reach Auth API
 
-No formal test suite currently exists. For manual testing:
+**Debug**:
+```bash
+# Test connectivity from Chat API container
+docker exec -it chat-api curl -v http://auth-api:8000/health
 
-**Generate Test JWT Token**:
+# Check network configuration
+docker network inspect activity-network
+
+# Verify both services on same network
+docker inspect chat-api | grep NetworkMode
+docker inspect auth-api | grep NetworkMode
+
+# Check AUTH_API_URL in Chat API
+docker exec -it chat-api env | grep AUTH_API_URL
+```
+
+### Code changes not reflected
+
+**Cause**: Forgot to rebuild Docker image
+
+**Solution**:
+```bash
+# Always rebuild after code changes
+docker compose build chat-api --no-cache
+docker compose restart chat-api
+
+# Verify new code is running
+docker compose logs chat-api | head -20
+```
+
+## Documentation
+
+### Primary Documentation
+- **`AUTHORIZATION.md`** - Complete authorization flow, permission levels, runtime checks
+- **`TEST_DATA_README.md`** - Test data setup, test users, verification queries
+- **`CLAUDE.md`** - This file (quick start, troubleshooting)
+
+### Related Documentation
+- **Auth API**: `/mnt/d/activity/auth-api/CLAUDE.md`
+- **Database Schema**: Auth API migrations (`/mnt/d/activity/auth-api/migrations/`)
+- **Main Project**: `/mnt/d/activity/CLAUDE.md`
+
+## Service Integration
+
+### Calling Auth API for Permission Checks
+
+**Endpoint**: `POST /api/v1/authorization/check`
+
+**Example**:
 ```python
-# generate_token.py
-from jose import jwt
-from datetime import datetime, timedelta
+import httpx
+from app.core.config import get_settings
 
-secret = "dev-secret-key-change-in-production"  # Match .env
-payload = {
-    "sub": "test-user-123",  # User UUID
-    "exp": datetime.utcnow() + timedelta(days=1)
-}
-token = jwt.encode(payload, secret, algorithm="HS256")
-print(f"Token: {token}")
+settings = get_settings()
+
+async def check_permission(org_id: str, user_id: str, permission: str) -> bool:
+    url = f"{settings.AUTH_API_URL}/api/v1/authorization/check"
+
+    headers = {
+        "X-Service-Token": settings.SERVICE_AUTH_TOKEN,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "org_id": org_id,
+        "user_id": user_id,
+        "permission": permission
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=payload, timeout=5.0)
+
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("allowed", False)
+
+        return False
 ```
 
-**Test REST Endpoints**:
-```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://localhost:8001/api/chat/groups
+**See `AUTHORIZATION.md` for complete implementation guide.**
+
+## Production Checklist
+
+Before deploying to production:
+
+**Security**:
+- [ ] Change JWT_SECRET_KEY to strong random string (64+ chars)
+- [ ] Change SERVICE_AUTH_TOKEN to strong random string (32+ chars)
+- [ ] Set ENVIRONMENT=production
+- [ ] Configure HTTPS/TLS termination
+- [ ] Review CORS origins for production domains
+
+**Infrastructure**:
+- [ ] Use managed MongoDB (e.g., MongoDB Atlas)
+- [ ] Configure connection pooling
+- [ ] Setup log aggregation (Loki, ELK, CloudWatch)
+- [ ] Configure monitoring alerts
+- [ ] Setup automated backups
+
+**Services**:
+- [ ] Set LOG_LEVEL=INFO or WARNING
+- [ ] Enable JSON logging (LOG_JSON_FORMAT=true)
+- [ ] Configure rate limiting
+- [ ] Review resource limits (CPU, memory)
+- [ ] Test failover scenarios
+
+**Performance**:
+- [ ] Implement Redis caching for permission checks (5 min TTL)
+- [ ] Setup MongoDB indexes for common queries
+- [ ] Configure connection pooling for Auth API calls
+- [ ] Load test permission check performance
+
+## Development Best Practices
+
+1. **Always rebuild after code changes**: `docker compose build --no-cache`
+2. **Test permission checks locally** before implementing endpoints
+3. **Use structured logging** with correlation IDs
+4. **Never bypass permission checks** for "convenience"
+5. **Keep JWT secrets in sync** between auth-api and chat-api
+6. **Monitor Auth API connectivity** - permission checks fail gracefully
+7. **Cache permission checks** in production (with proper invalidation)
+8. **Document all new permissions** in AUTHORIZATION.md
+9. **Test cross-org access attempts** for security validation
+10. **Follow stored procedure pattern** for Auth API database operations
+
+## Need Help?
+
+1. **Authorization Issues**: See `AUTHORIZATION.md`
+2. **Test Data**: See `TEST_DATA_README.md`
+3. **Service Status**: Run `./scripts/status.sh`
+4. **Check Logs**: `docker logs -f chat-api`
+5. **Database Access**: `mongosh` or Auth API PostgreSQL
+6. **Auth API**: See `../auth-api/CLAUDE.md`
+
+## Key Files
+
+```
+/mnt/d/activity/chat-api/
+├── CLAUDE.md                  # This file (quick start)
+├── AUTHORIZATION.md           # Complete authorization documentation
+├── TEST_DATA_README.md        # Test data documentation
+├── test_rbac_setup.sql        # SQL script for test data
+├── app/
+│   ├── main.py               # FastAPI application
+│   ├── core/
+│   │   ├── oauth_validator.py # JWT validation
+│   │   └── logging_config.py  # Structured logging
+│   ├── services/
+│   │   ├── auth_service.py   # Auth API integration
+│   │   └── chat_service.py   # Business logic
+│   └── routes/
+│       └── messages.py       # API endpoints
+├── .env                      # Configuration (not in git)
+└── docker-compose.yml        # Docker setup
 ```
 
-**Test WebSocket**:
-```javascript
-const ws = new WebSocket('ws://localhost:8001/api/chat/ws/GROUP_ID?token=YOUR_TOKEN');
-ws.onmessage = (event) => console.log(JSON.parse(event.data));
-ws.send(JSON.stringify({type: "ping"}));
-```
+---
 
-## Production Deployment
-
-Checklist before deploying:
-
-1. Change `JWT_SECRET` to strong random string (32+ chars)
-2. Set `DEBUG=false`
-3. Set `ENVIRONMENT=production` (enables JSON logging)
-4. Set `LOG_LEVEL=INFO`
-5. Use production MongoDB (e.g., MongoDB Atlas)
-6. Configure HTTPS/TLS termination
-7. Review `CORS_ORIGINS` for production domains
-8. Setup log aggregation (ELK, Datadog, CloudWatch)
-9. Configure health check monitoring on `/health`
-10. Setup backup strategy for MongoDB
-
-See `docker-compose.yml` for Docker deployment configuration.
+**Last Updated**: 2025-11-20
+**Version**: 2.0 (Runtime Permission Validation)

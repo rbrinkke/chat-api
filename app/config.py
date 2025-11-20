@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     AUTH_API_URL: str = "http://auth-api:8000"
     AUTH_API_ISSUER: str = "http://auth-api:8000"  # Expected 'iss' claim
     AUTH_API_TIMEOUT: float = 3.0  # Timeout for Auth-API HTTP requests (seconds)
+    SERVICE_AUTH_TOKEN: str = "your-service-token-change-in-production"  # Service-to-service authentication
 
     # Service-to-Service OAuth 2.0 (Client Credentials Flow)
     # Used by ChatService to fetch group data from Auth-API

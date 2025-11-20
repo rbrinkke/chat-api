@@ -23,7 +23,7 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
-import aiohttp  # LEGACY - Using aiohttp for compatibility (will be removed after OAuth2 migration)
+import httpx
 from app.config import settings
 from app.core.logging_config import get_logger
 from app.core.cache import cache
@@ -363,11 +363,14 @@ class AuthAPIClient:
         self.endpoint = settings.AUTH_API_PERMISSION_CHECK_ENDPOINT
         self.circuit_breaker = CircuitBreaker()
 
-        # Create persistent HTTP client
+        # Create persistent HTTP client with service authentication
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self.timeout,
-            headers={"Content-Type": "application/json"}
+            headers={
+                "Content-Type": "application/json",
+                "X-Service-Token": settings.SERVICE_AUTH_TOKEN
+            }
         )
 
     async def close(self):
@@ -409,7 +412,7 @@ class AuthAPIClient:
             response = await self.client.post(
                 self.endpoint,
                 json={
-                    "organization_id": org_id,
+                    "org_id": org_id,
                     "user_id": user_id,
                     "permission": permission
                 }
