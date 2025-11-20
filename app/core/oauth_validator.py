@@ -17,6 +17,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from app.core.logging_config import get_logger
+from app.config import settings
 
 logger = get_logger(__name__)
 
@@ -24,12 +25,11 @@ logger = get_logger(__name__)
 # Configuration (from environment variables)
 # ============================================================================
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-AUTH_API_URL = os.getenv("AUTH_API_URL", "http://auth-api:8000")
+JWT_SECRET_KEY = settings.JWT_SECRET_KEY
+JWT_ALGORITHM = settings.JWT_ALGORITHM
+AUTH_API_URL = settings.AUTH_API_URL
 
-if not JWT_SECRET_KEY:
-    raise ValueError("JWT_SECRET_KEY environment variable must be set")
+
 
 security = HTTPBearer()
 
