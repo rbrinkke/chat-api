@@ -21,7 +21,7 @@ from app.models.message import Message
 from app.core.exceptions import NotFoundError, ForbiddenError, BadRequestError
 from app.core.logging_config import get_logger
 from app.services.connection_manager import manager
-from app.services.group_service import get_group_service, GroupDetails
+from app.services.group_service import get_group_service, GroupDetails, GroupService
 from app.core import metrics
 
 logger = get_logger(__name__)
@@ -42,9 +42,9 @@ class ChatService:
     - Message ownership validation
     """
 
-    def __init__(self):
+    def __init__(self, group_service: GroupService):
         """Initialize ChatService with GroupService."""
-        self.group_service = get_group_service()
+        self.group_service = group_service
 
     async def create_message(
         self,

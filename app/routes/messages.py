@@ -9,9 +9,14 @@ from app.schemas.message import (
 )
 from app.core.logging_config import get_logger
 from app.core.rate_limit import limiter
+from app.services.group_service import get_group_service, GroupService
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def get_chat_service(group_service: GroupService = Depends(get_group_service)) -> ChatService:
+    return ChatService(group_service=group_service)
 
 @router.post(
     "/groups/{group_id}/messages",
@@ -24,7 +29,7 @@ async def create_message(
     group_id: str,
     message_data: MessageCreate,
     token: OAuthToken = Depends(require_scope("chat:write")),
-    chat_service: ChatService = Depends(ChatService)
+    chat_service: ChatService = Depends(get_chat_service)
 ):
     """
     Create a new message in a group.
@@ -50,7 +55,7 @@ async def create_message(
         content=message_data.content
     )
 
-    return MessageResponse.from_model(message)
+    return message
 
 @router.get(
     "/groups/{group_id}/messages",
@@ -62,7 +67,7 @@ async def get_messages(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=100, description="Messages per page"),
     token: OAuthToken = Depends(require_scope("chat:read")),
-    chat_service: ChatService = Depends(ChatService)
+    chat_service: ChatService = Depends(get_chat_service)
 ):
     """
     Get paginated message history for a group.
@@ -94,7 +99,7 @@ async def get_messages(
     has_more = (page * page_size) < total
 
     return MessageListResponse(
-        messages=[MessageResponse.from_model(msg) for msg in messages],
+        messages=messages,
         total=total,
         page=page,
         page_size=page_size,
@@ -112,7 +117,7 @@ async def update_message(
     message_id: str,
     message_data: MessageUpdate,
     token: OAuthToken = Depends(require_scope("chat:write")),
-    chat_service: ChatService = Depends(ChatService)
+    chat_service: ChatService = Depends(get_chat_service)
 ):
     """
     Update an existing message (only by sender).
@@ -138,7 +143,7 @@ async def update_message(
         new_content=message_data.content
     )
 
-    return MessageResponse.from_model(message)
+    return message
 
 @router.delete(
     "/messages/{message_id}",
@@ -149,7 +154,7 @@ async def delete_message(
     request: Request,
     message_id: str,
     token: OAuthToken = Depends(require_scope("chat:write")),
-    chat_service: ChatService = Depends(ChatService)
+    chat_service: ChatService = Depends(get_chat_service)
 ):
     """
     Delete a message (soft delete, only by sender).
