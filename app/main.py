@@ -15,7 +15,7 @@ from app.db.mongodb import init_db
 from app.middleware.access_log import AccessLogMiddleware, RequestContextMiddleware
 # OAuth2Middleware uses RS256/JWKS - not needed for HS256
 # from app.middleware.oauth2 import OAuth2Middleware  # OAuth 2.0 Resource Server
-from app.routes import messages, websocket, dashboard, test_ui
+from app.routes import messages, websocket, dashboard, test_ui, example_auth_check
 
 # Setup structured logging BEFORE any other imports that might log
 setup_logging()
@@ -58,44 +58,16 @@ async def lifespan(app: FastAPI):
         message="OAuth 2.0 using HS256 symmetric signing (shared secret with Auth API)"
     )
 
-    # ========== Service-to-Service OAuth (Client Credentials) ==========
-    # Initialize token manager for Auth-API group data access
-    try:
-        from app.core.service_auth import init_service_token_manager
-
-        token_manager = init_service_token_manager(
-            client_id=settings.SERVICE_CLIENT_ID,
-            client_secret=settings.SERVICE_CLIENT_SECRET,
-            token_url=settings.SERVICE_TOKEN_URL,
-            scope=settings.SERVICE_SCOPE
-        )
-        logger.info(
-            "service_token_manager_initialized",
-            client_id=settings.SERVICE_CLIENT_ID,
-            token_url=settings.SERVICE_TOKEN_URL,
-            scope=settings.SERVICE_SCOPE
-        )
-
-        # ✅ CRITICAL: Start token manager in async context
-        # This creates aiohttp.ClientSession in the correct event loop
-        await token_manager.start()
-
-        # ✅ CRITICAL: Start group service in async context
-        # This creates aiohttp.ClientSession in the correct event loop
-        from app.services.group_service import get_group_service
-        group_service = get_group_service()
-        await group_service.start()
-
-    except Exception as e:
-        logger.error(
-            "service_token_manager_initialization_failed",
-            error=str(e),
-            exc_info=True
-        )
-        raise
-
-    # ✅ OAuth 2.0 migration complete - No legacy RBAC needed!
-    # All authorization now handled via OAuth2 Client Credentials + JWT validation
+    # ========== Auth API Client (API Key Authentication) ==========
+    # Initialize Auth API Client for permission checks
+    # Uses simple API Key authentication (X-Service-Token header)
+    from app.services.auth_api_client import get_auth_api_client
+    auth_api_client = get_auth_api_client()
+    logger.info(
+        "auth_api_client_initialized",
+        auth_api_url=settings.AUTH_API_URL,
+        auth_method="api_key"
+    )
 
     yield
 
@@ -107,16 +79,7 @@ async def lifespan(app: FastAPI):
     await manager.shutdown_all()
 
     # OAuth 2.0 HS256 doesn't require cleanup (no JWKS manager)
-
-    # Close service token manager HTTP client
-    from app.core.service_auth import get_service_token_manager
-    token_manager = get_service_token_manager()
-    await token_manager.close()
-
-    # Close group service HTTP client
-    from app.services.group_service import get_group_service
-    group_service = get_group_service()
-    await group_service.close()
+    # Auth API Client doesn't require cleanup (no persistent connections)
 
     # Close cache connection
     await cache.close()
@@ -223,6 +186,7 @@ app.include_router(messages.router, prefix=settings.API_PREFIX, tags=["messages"
 app.include_router(websocket.router, prefix=settings.API_PREFIX, tags=["websocket"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
 app.include_router(test_ui.router, tags=["test-ui"])
+app.include_router(example_auth_check.router, prefix=settings.API_PREFIX, tags=["auth-examples"])
 
 
 # Configure OpenAPI security scheme for JWT Bearer authentication
@@ -281,7 +245,7 @@ async def health_check():
         "mongodb": "unknown",
         "redis": "unknown" if settings.REDIS_URL else "not_configured",
         "oauth_hs256": "unknown",  # JWT validation (HS256 shared secret)
-        "oauth_service_auth": "unknown"  # Service-to-service OAuth2 Client Credentials
+        "auth_api_client": "unknown"  # Auth API Client (API Key)
     }
 
     # Check MongoDB (using Message model - Group model removed)
@@ -314,28 +278,25 @@ async def health_check():
         logger.error("health_check_oauth_hs256_failed", error=str(e))
         checks["oauth_hs256"] = f"unhealthy: {type(e).__name__}"
 
-    # OAuth 2.0 Service-to-Service Auth - Check token manager
+    # Auth API Client - Check connectivity
     try:
-        from app.core.service_auth import get_service_token_manager
-        token_manager = get_service_token_manager()
+        from app.services.auth_api_client import get_auth_api_client
+        auth_client = get_auth_api_client()
 
-        # Quick check: try to get a token (will use cached if valid)
-        token = await token_manager.get_token()
-
-        if token and len(token) > 0:
-            checks["oauth_service_auth"] = "healthy (OAuth2 Client Credentials)"
+        if auth_client.service_token and len(auth_client.service_token) > 10:
+            checks["auth_api_client"] = "healthy (API Key configured)"
         else:
-            checks["oauth_service_auth"] = "unhealthy: no token available"
+            checks["auth_api_client"] = "unhealthy: SERVICE_AUTH_TOKEN missing"
 
     except Exception as e:
-        logger.error("health_check_service_auth_failed", error=str(e))
-        checks["oauth_service_auth"] = f"unhealthy: {type(e).__name__}"
+        logger.error("health_check_auth_api_client_failed", error=str(e))
+        checks["auth_api_client"] = f"unhealthy: {type(e).__name__}"
 
     # Determine overall status
     critical_checks = [checks["mongodb"]]  # MongoDB is critical
 
     # HS256 OAuth doesn't need JWKS - only shared secret required
-    # Service-to-service OAuth verified via oauth_service_auth check
+    # Auth API Client verified via auth_api_client check
 
     all_healthy = all(
         status.startswith("healthy") or status.startswith("degraded")

@@ -34,6 +34,9 @@ colorama==0.4.6  # For colored console output in development
 slowapi==0.1.9  # Rate limiting for FastAPI
 bleach==6.1.0  # HTML sanitization for XSS prevention
 
+# HTTP Client
+httpx==0.27.0  # For Auth API Client service-to-service communication
+
 # Caching (optional)
 redis==5.0.1  # Redis client for caching
 

@@ -39,32 +39,7 @@ class Settings(BaseSettings):
     AUTH_API_URL: str = "http://auth-api:8000"
     AUTH_API_ISSUER: str = "http://auth-api:8000"  # Expected 'iss' claim
     AUTH_API_TIMEOUT: float = 3.0  # Timeout for Auth-API HTTP requests (seconds)
-    SERVICE_AUTH_TOKEN: str = "your-service-token-change-in-production"  # Service-to-service authentication
-
-    # Service-to-Service OAuth 2.0 (Client Credentials Flow)
-    # Used by ChatService to fetch group data from Auth-API
-    SERVICE_CLIENT_ID: str = "chat-api-service"
-    SERVICE_CLIENT_SECRET: str = "your-service-secret-change-in-production"
-    SERVICE_TOKEN_URL: str = "http://auth-api:8000/oauth/token"
-    SERVICE_SCOPE: str = "groups:read"  # Required scope for group data access
-
-    # Legacy Settings (Deprecated - Will be removed after full OAuth migration)
-    AUTH_API_PERMISSION_CHECK_ENDPOINT: str = "/api/v1/authorization/check"  # DEPRECATED
-
-    # Authorization Cache Settings
-    AUTH_CACHE_ENABLED: bool = True
-    AUTH_CACHE_TTL_READ: int = 300      # 5 minutes for read operations
-    AUTH_CACHE_TTL_WRITE: int = 60      # 1 minute for write operations
-    AUTH_CACHE_TTL_ADMIN: int = 30      # 30 seconds for admin operations
-    AUTH_CACHE_TTL_DENIED: int = 120    # 2 minutes for denied permissions (negative caching)
-
-    # Circuit Breaker Settings
-    CIRCUIT_BREAKER_THRESHOLD: int = 5           # Number of failures before circuit opens
-    CIRCUIT_BREAKER_TIMEOUT: int = 30            # Seconds circuit stays open
-    CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS: int = 3 # Max calls in HALF_OPEN state
-
-    # Fallback Behavior (CRITICAL SECURITY SETTING)
-    AUTH_FAIL_OPEN: bool = False  # False = Fail-Closed (secure), True = Fail-Open (dangerous)
+    SERVICE_AUTH_TOKEN: str = "your-service-token-change-in-production"  # Service-to-service API Key
 
     # Logging
     LOG_LEVEL: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL

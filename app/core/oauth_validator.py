@@ -377,16 +377,16 @@ def require_permission(permission: str):
         HTTPException: 401 if token invalid, 403 if permission denied
     """
     async def permission_checker(token: OAuthToken = Depends(validate_oauth_token)) -> OAuthToken:
-        from app.core.authorization import get_authorization_service
+        from app.services.auth_api_client import get_auth_api_client
 
-        # Get authorization service
-        auth_service = await get_authorization_service()
+        # Get Auth API client
+        auth_client = get_auth_api_client()
 
         try:
-            # Check permission via Auth API
-            allowed = await auth_service.check_permission(
-                org_id=token.org_id,
+            # Check permission via Auth API (fail-closed)
+            allowed = await auth_client.check_permission_safe(
                 user_id=token.user_id,
+                org_id=token.org_id,
                 permission=permission
             )
 
@@ -463,16 +463,16 @@ def require_permission_hierarchy(base_permission: str, admin_permission: str = "
         HTTPException: 401 if token invalid, 403 if both permissions denied
     """
     async def permission_checker(token: OAuthToken = Depends(validate_oauth_token)) -> OAuthToken:
-        from app.core.authorization import get_authorization_service
+        from app.services.auth_api_client import get_auth_api_client
 
-        # Get authorization service
-        auth_service = await get_authorization_service()
+        # Get Auth API client
+        auth_client = get_auth_api_client()
 
         try:
             # Check admin permission first (allows deleting ANY message)
-            admin_allowed = await auth_service.check_permission(
-                org_id=token.org_id,
+            admin_allowed = await auth_client.check_permission_safe(
                 user_id=token.user_id,
+                org_id=token.org_id,
                 permission=admin_permission
             )
 
@@ -486,9 +486,9 @@ def require_permission_hierarchy(base_permission: str, admin_permission: str = "
                 return token
 
             # Check base permission (allows deleting OWN messages)
-            base_allowed = await auth_service.check_permission(
-                org_id=token.org_id,
+            base_allowed = await auth_client.check_permission_safe(
                 user_id=token.user_id,
+                org_id=token.org_id,
                 permission=base_permission
             )
 

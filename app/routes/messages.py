@@ -197,11 +197,11 @@ async def delete_message(
     raw_token = request.headers.get("Authorization", "").replace("Bearer ", "")
 
     # Check if user has admin permission (allows deleting ANY message)
-    from app.core.authorization import get_authorization_service
-    auth_service = await get_authorization_service()
-    is_admin = await auth_service.check_permission(
-        org_id=token.org_id,
+    from app.services.auth_api_client import get_auth_api_client
+    auth_client = get_auth_api_client()
+    is_admin = await auth_client.check_permission_safe(
         user_id=token.user_id,
+        org_id=token.org_id,
         permission="chat:admin"
     )
 
