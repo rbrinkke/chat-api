@@ -8,14 +8,9 @@ from app.config import settings
 from app.core.logging_config import setup_logging, get_logger
 from app.core.rate_limit import limiter
 from app.core.cache import cache
-# OAuth 2.0 HS256 - No legacy RBAC needed (fully migrated to OAuth2)
-# JWKS not needed for HS256 (symmetric signing with shared secret)
-# from app.core.jwks_manager import get_jwks_manager, close_jwks_manager  # OAuth 2.0
 from app.db.mongodb import init_db
 from app.middleware.access_log import AccessLogMiddleware, RequestContextMiddleware
-# OAuth2Middleware uses RS256/JWKS - not needed for HS256
-# from app.middleware.oauth2 import OAuth2Middleware  # OAuth 2.0 Resource Server
-from app.routes import messages, websocket, dashboard, test_ui, example_auth_check
+from app.routes import messages, websocket, dashboard, test_ui, example_auth_check, ops
 
 # Setup structured logging BEFORE any other imports that might log
 setup_logging()
@@ -77,9 +72,6 @@ async def lifespan(app: FastAPI):
     # Gracefully close all WebSocket connections
     from app.services.connection_manager import manager
     await manager.shutdown_all()
-
-    # OAuth 2.0 HS256 doesn't require cleanup (no JWKS manager)
-    # Auth API Client doesn't require cleanup (no persistent connections)
 
     # Close cache connection
     await cache.close()
@@ -181,12 +173,14 @@ app.add_middleware(AccessLogMiddleware)
 app.add_middleware(RequestContextMiddleware)
 
 # Include routers
-# groups router removed - Auth-API is now Single Source of Truth for groups
+app.include_router(ops.router, tags=["operations"])
 app.include_router(messages.router, prefix=settings.API_PREFIX, tags=["messages"])
 app.include_router(websocket.router, prefix=settings.API_PREFIX, tags=["websocket"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
-app.include_router(test_ui.router, tags=["test-ui"])
-app.include_router(example_auth_check.router, prefix=settings.API_PREFIX, tags=["auth-examples"])
+
+if settings.ENVIRONMENT == "development":
+    app.include_router(test_ui.router, tags=["test-ui"])
+    app.include_router(example_auth_check.router, prefix=settings.API_PREFIX, tags=["auth-examples"])
 
 
 # Configure OpenAPI security scheme for JWT Bearer authentication
@@ -220,116 +214,6 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
-
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    """
-    Production-grade health check endpoint.
-
-    Verifies:
-    - MongoDB connectivity
-    - Redis connectivity (if configured)
-    - Auth API connectivity (for RBAC)
-    - Overall application health
-
-    Returns 200 if all checks pass, 503 if any critical component fails.
-    """
-    from datetime import datetime
-    from app.models.message import Message
-    from fastapi.responses import JSONResponse
-
-    checks = {
-        "application": "healthy",
-        "mongodb": "unknown",
-        "redis": "unknown" if settings.REDIS_URL else "not_configured",
-        "oauth_hs256": "unknown",  # JWT validation (HS256 shared secret)
-        "auth_api_client": "unknown"  # Auth API Client (API Key)
-    }
-
-    # Check MongoDB (using Message model - Group model removed)
-    try:
-        await Message.find().limit(1).to_list()
-        checks["mongodb"] = "healthy"
-    except Exception as e:
-        logger.error("health_check_mongodb_failed", error=str(e))
-        checks["mongodb"] = f"unhealthy: {type(e).__name__}"
-
-    # Check Redis (if configured)
-    if settings.REDIS_URL and cache.enabled:
-        try:
-            await cache.redis.ping()
-            checks["redis"] = "healthy"
-        except Exception as e:
-            logger.error("health_check_redis_failed", error=str(e))
-            checks["redis"] = f"unhealthy: {type(e).__name__}"
-
-    # Check OAuth HS256 Configuration (JWT_SECRET_KEY validation)
-    try:
-        from app.core.oauth_validator import JWT_SECRET_KEY, JWT_ALGORITHM
-
-        if JWT_SECRET_KEY and len(JWT_SECRET_KEY) >= 32:
-            checks["oauth_hs256"] = f"healthy (algorithm: {JWT_ALGORITHM})"
-        else:
-            checks["oauth_hs256"] = "unhealthy: JWT_SECRET_KEY too short or missing"
-
-    except Exception as e:
-        logger.error("health_check_oauth_hs256_failed", error=str(e))
-        checks["oauth_hs256"] = f"unhealthy: {type(e).__name__}"
-
-    # Auth API Client - Check connectivity
-    try:
-        from app.services.auth_api_client import get_auth_api_client
-        auth_client = get_auth_api_client()
-
-        if auth_client.service_token and len(auth_client.service_token) > 10:
-            checks["auth_api_client"] = "healthy (API Key configured)"
-        else:
-            checks["auth_api_client"] = "unhealthy: SERVICE_AUTH_TOKEN missing"
-
-    except Exception as e:
-        logger.error("health_check_auth_api_client_failed", error=str(e))
-        checks["auth_api_client"] = f"unhealthy: {type(e).__name__}"
-
-    # Determine overall status
-    critical_checks = [checks["mongodb"]]  # MongoDB is critical
-
-    # HS256 OAuth doesn't need JWKS - only shared secret required
-    # Auth API Client verified via auth_api_client check
-
-    all_healthy = all(
-        status.startswith("healthy") or status.startswith("degraded")
-        for status in critical_checks
-    )
-
-    overall_status = "healthy" if all_healthy else "degraded"
-    status_code = 200 if all_healthy else 503
-
-    response_data = {
-        "status": overall_status,
-        "service": "chat-api",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "app": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "checks": checks
-    }
-
-    return JSONResponse(content=response_data, status_code=status_code)
-
-
-# Root endpoint
-@app.get("/")
-async def root():
-    """Root endpoint."""
-    return {
-        "app": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "docs": "/docs",
-        "health": "/health",
-        "dashboard": "/dashboard",
-        "test_ui": "/test-chat"
-    }
 
 
 if __name__ == "__main__":
