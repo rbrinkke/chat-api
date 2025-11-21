@@ -17,6 +17,12 @@ logger = get_logger(__name__)
 def get_chat_service() -> ChatService:
     return ChatService()
 
+
+def get_raw_token(request: Request) -> str:
+    """Helper to extract raw JWT token from Authorization header."""
+    return request.headers.get("Authorization", "").replace("Bearer ", "")
+
+
 @router.post(
     "/conversations/{conversation_id}/messages",
     response_model=MessageResponse,
@@ -28,6 +34,7 @@ async def create_message(
     conversation_id: str,
     message_data: MessageCreate,
     token: OAuthToken = Depends(require_permission("chat:write")),
+    raw_token: str = Depends(get_raw_token),
     chat_service: ChatService = Depends(get_chat_service)
 ):
     """
@@ -47,9 +54,6 @@ async def create_message(
         user_id=token.user_id
     )
 
-    # Extract raw JWT token from Authorization header
-    raw_token = request.headers.get("Authorization", "").replace("Bearer ", "")
-
     message = await chat_service.create_message(
         conversation_id =conversation_id,
         org_id=token.org_id,
@@ -66,11 +70,12 @@ async def create_message(
     status_code=status.HTTP_200_OK
 )
 async def get_messages(
-    request: Request,
+    request: Request, # Needed for logging middleware context potentially, but definitely cleaner to keep if standard
     conversation_id: str,
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=100, description="Messages per page"),
     token: OAuthToken = Depends(require_permission("chat:read")),
+    raw_token: str = Depends(get_raw_token),
     chat_service: ChatService = Depends(get_chat_service)
 ):
     """
@@ -91,9 +96,6 @@ async def get_messages(
         page=page,
         page_size=page_size
     )
-
-    # Extract raw JWT token from Authorization header
-    raw_token = request.headers.get("Authorization", "").replace("Bearer ", "")
 
     messages, total = await chat_service.get_messages(
         conversation_id=conversation_id,
@@ -129,6 +131,7 @@ async def update_message(
     message_id: str,
     message_data: MessageUpdate,
     token: OAuthToken = Depends(require_permission("chat:write")),
+    raw_token: str = Depends(get_raw_token),
     chat_service: ChatService = Depends(get_chat_service)
 ):
     """
@@ -149,9 +152,6 @@ async def update_message(
         org_id=token.org_id,
         user_id=token.user_id
     )
-
-    # Extract raw JWT token from Authorization header
-    raw_token = request.headers.get("Authorization", "").replace("Bearer ", "")
 
     message = await chat_service.update_message(
         message_id=message_id,
@@ -174,6 +174,7 @@ async def delete_message(
     conversation_id: str,
     message_id: str,
     token: OAuthToken = Depends(require_permission_hierarchy("chat:write", "chat:admin")),
+    raw_token: str = Depends(get_raw_token),
     chat_service: ChatService = Depends(get_chat_service)
 ):
     """
@@ -194,9 +195,6 @@ async def delete_message(
         org_id=token.org_id,
         user_id=token.user_id
     )
-
-    # Extract raw JWT token from Authorization header
-    raw_token = request.headers.get("Authorization", "").replace("Bearer ", "")
 
     # Check if user has admin permission (allows deleting ANY message)
     from app.services.auth_api_client import get_auth_api_client

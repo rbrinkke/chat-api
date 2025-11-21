@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings
-from pydantic import ConfigDict
-from typing import List
+from pydantic import ConfigDict, field_validator, ValidationInfo
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     # JWT Validation - HS256 symmetric signing with Auth API
     JWT_SECRET_KEY: str = "dev_secret_key_change_in_production_min_32_chars_required"  # MUST match Auth API
     JWT_ALGORITHM: str = "HS256"  # Symmetric signing (shared secret)
+
+    @field_validator("JWT_SECRET_KEY")
+    @classmethod
+    def validate_jwt_secret(cls, v: str, info: ValidationInfo) -> str:
+        if info.data.get("ENVIRONMENT") == "production":
+            default_key = "dev_secret_key_change_in_production_min_32_chars_required"
+            if v == default_key:
+                raise ValueError("Production environment must not use the default JWT_SECRET_KEY")
+            if len(v) < 32:
+                raise ValueError("Production JWT_SECRET_KEY must be at least 32 characters long")
+        return v
 
     # Authorization Server (Auth-API) Settings
     AUTH_API_URL: str = "http://auth-api:8000"
